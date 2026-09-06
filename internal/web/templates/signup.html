@@ -1,0 +1,11 @@
+{{template "head" .}}
+<h2>Create your account</h2>
+{{template "errors" .}}
+<form method="post" action="/auth/signup/">
+  <label>Name <input type="text" name="name" required autofocus></label>
+  <label>Email <input type="email" name="email" required></label>
+  <label>Password <input type="password" name="password" minlength="8" required></label>
+  <button type="submit">Sign up</button>
+</form>
+<p class="muted">Already have an account? <a href="/auth/login/">Log in</a></p>
+{{template "foot" .}}

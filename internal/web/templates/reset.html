@@ -1,0 +1,9 @@
+{{template "head" .}}
+<h2>Choose a new password</h2>
+{{template "errors" .}}
+<form method="post" action="/auth/reset/">
+  <input type="hidden" name="token" value="{{index .Data "token"}}">
+  <label>New password <input type="password" name="password" minlength="8" required autofocus></label>
+  <button type="submit">Reset password</button>
+</form>
+{{template "foot" .}}

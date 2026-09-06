@@ -1,0 +1,38 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · BugHan</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="brand"><span class="brand-mark">Ⓑ</span> BugHan</span>
+  <form method="post" action="/auth/logout/" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{index .Data "csrf"}}">
+    <button class="btn btn-ghost" type="submit">Log out</button>
+  </form>
+</header>
+<main class="container">
+{{end}}
+{{define "foot"}}</main>
+</body>
+</html>{{end}}
+<h2>Your organizations</h2>
+{{template "errors" .}}
+{{if eq (index .Data "has_orgs") "none"}}
+<p class="muted">You're not a member of any organization yet. Create one to start tracking errors.</p>
+{{end}}
+<ul class="org-list">
+{{range .Data.orgs}}
+  <li><strong>{{.Name}}</strong> <span class="muted">/{{.Slug}} · {{.Role}}</span></li>
+{{end}}
+</ul>
+<h3>Create an organization</h3>
+<form method="post" action="/orgs/new/" class="stacked-form">
+  <input type="hidden" name="csrf_token" value="{{index .Data "csrf"}}">
+  <label>Name <input type="text" name="name" required></label>
+  <button type="submit">Create organization</button>
+</form>
+{{template "foot" .}}

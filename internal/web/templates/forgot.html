@@ -1,0 +1,9 @@
+{{template "head" .}}
+<h2>Reset your password</h2>
+{{template "errors" .}}
+<form method="post" action="/auth/forgot/">
+  <label>Email <input type="email" name="email" required autofocus></label>
+  <button type="submit">Send reset link</button>
+</form>
+<p class="muted"><a href="/auth/login/">Back to log in</a></p>
+{{template "foot" .}}

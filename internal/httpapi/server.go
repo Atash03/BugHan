@@ -5,20 +5,32 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Atash03/BugHan/internal/auth"
 	"github.com/Atash03/BugHan/internal/config"
+	"github.com/Atash03/BugHan/internal/mail"
+	"github.com/Atash03/BugHan/internal/web"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Server holds shared dependencies for all handlers.
 type Server struct {
-	cfg  *config.Config
-	pool *pgxpool.Pool
-	log  *slog.Logger
+	cfg      *config.Config
+	pool     *pgxpool.Pool
+	log      *slog.Logger
+	sessions *auth.Sessions
+	mailer   *mail.Mailer
+	version  string
 }
 
 // New creates the server root.
 func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, pool: pool, log: log}
+	return &Server{
+		cfg:      cfg,
+		pool:     pool,
+		log:      log,
+		sessions: auth.NewSessions(pool),
+		mailer:   mail.New(cfg, log),
+	}
 }
 
 // Handler builds the full route table.
@@ -28,10 +40,18 @@ func (s *Server) Handler() http.Handler {
 	// Health (liveness + DB readiness).
 	mux.HandleFunc("GET /api/health/", s.handleHealth)
 
-	// API v0 (token-authenticated REST) and ingest are registered by later slices.
+	// Embedded static assets.
+	mux.Handle("GET /static/", web.Static())
+
+	// Auth + tenancy pages/API.
+	s.registerAuth(mux)
+	s.registerLanding(mux)
+	s.registerTenancy(mux)
+
+	// SDK-facing ingest is registered by the ingest slice.
 	s.registerIngest(mux)
 
-	return s.logRequests(mux)
+	return s.loadPrincipal(s.logRequests(mux))
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {

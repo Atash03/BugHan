@@ -1,0 +1,24 @@
+{{define "head"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · BugHan</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="auth-body">
+<main class="auth-card">
+  <h1 class="brand"><span class="brand-mark">Ⓑ</span> BugHan</h1>
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}
+
+{{define "errors"}}
+{{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+{{if .Notice}}<div class="alert alert-notice">{{.Notice}}</div>{{end}}
+{{end}}

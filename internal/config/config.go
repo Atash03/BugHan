@@ -11,12 +11,12 @@ import (
 // Config is the full runtime configuration, loaded once at startup.
 type Config struct {
 	// Core
-	SecretKey  string // HMAC/cookie signing secret (required)
-	DatabaseURL string // Postgres connection string (required)
-	PublicURL  string // Public base URL, e.g. https://bugs.example.com (used in DSNs, links)
-	BindAddr   string // HTTP listen address
-	WorkerEmbedded bool // run the background worker in this process
-	SingleOrg  bool   // lock the install to the first organization
+	SecretKey      string // HMAC/cookie signing secret (required)
+	DatabaseURL    string // Postgres connection string (required)
+	PublicURL      string // Public base URL, e.g. https://bugs.example.com (used in DSNs, links)
+	BindAddr       string // HTTP listen address
+	WorkerEmbedded bool   // run the background worker in this process
+	SingleOrg      bool   // lock the install to the first organization
 
 	// Ingest limits
 	MaxEventBytes int64 // decompressed envelope cap

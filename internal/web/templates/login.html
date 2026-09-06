@@ -1,0 +1,10 @@
+{{template "head" .}}
+<h2>Log in</h2>
+{{template "errors" .}}
+<form method="post" action="/auth/login/">
+  <label>Email <input type="email" name="email" required autofocus></label>
+  <label>Password <input type="password" name="password" required></label>
+  <button type="submit">Log in</button>
+</form>
+<p class="muted">No account? <a href="/auth/signup/">Sign up</a> · <a href="/auth/forgot/">Forgot password?</a></p>
+{{template "foot" .}}

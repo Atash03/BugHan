@@ -1,0 +1,7 @@
+{{template "head" .}}
+<h2>Join {{index .Data "org_name"}}</h2>
+<p class="muted">You've been invited as {{index .Data "role"}}. Log in or sign up to accept.</p>
+{{template "errors" .}}
+<p><a class="btn" href="/auth/login/?next=/accept/{{index .Data "token"}}">Log in to accept</a></p>
+<p><a class="btn" href="/auth/signup/?invite={{index .Data "token"}}">Sign up to accept</a></p>
+{{template "foot" .}}

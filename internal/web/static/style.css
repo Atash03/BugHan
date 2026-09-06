@@ -1,0 +1,65 @@
+/* BugHan base styles — full design pass lands with the UI slice. */
+:root {
+  --bg: #0f1117;
+  --surface: #171a23;
+  --surface-2: #1e2230;
+  --border: #2a2f3e;
+  --text: #e6e8ee;
+  --muted: #8b91a3;
+  --accent: #6c7bff;
+  --accent-hover: #8593ff;
+  --error: #ff6c6c;
+  --notice: #ffd66c;
+  --ok: #4cc38a;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
+
+.auth-body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.auth-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 32px 36px;
+  width: 380px;
+}
+.brand { font-size: 20px; margin: 0 0 18px; }
+.brand-mark { color: var(--accent); }
+h2 { font-size: 17px; margin: 0 0 14px; }
+label { display: block; margin: 12px 0 4px; font-size: 13px; color: var(--muted); }
+input {
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14px;
+}
+input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+button, .btn {
+  display: inline-block;
+  margin-top: 16px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 7px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+button:hover, .btn:hover { background: var(--accent-hover); color: #fff; }
+.muted { color: var(--muted); font-size: 13px; margin-top: 14px; }
+.alert { padding: 10px 12px; border-radius: 7px; font-size: 13px; margin: 10px 0; word-break: break-all; }
+.alert-error { background: rgba(255, 108, 108, .12); color: var(--error); }
+.alert-notice { background: rgba(255, 214, 108, .12); color: var(--notice); }
