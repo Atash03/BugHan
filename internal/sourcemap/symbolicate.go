@@ -13,11 +13,11 @@ type Frame struct {
 
 // Snippet is the inline code excerpt rendered from sourcesContent.
 type Snippet struct {
-	Path     string
-	Line     int      // 1-based line the excerpt is centered on
-	Pre      []string // lines above, nearest first
-	LineText string
-	Post     []string // lines below, nearest first
+	Path     string   `json:"path"`
+	Line     int      `json:"line"`        // 1-based line the excerpt is centered on
+	Pre      []string `json:"pre_context"` // lines above, nearest first
+	LineText string   `json:"context_line"`
+	Post     []string `json:"post_context"` // lines below, nearest first
 }
 
 // FrameResult is the symbolicated view of one minified frame.

@@ -53,6 +53,11 @@ func (ix *Index) ResolveMap(absPath string, imageDebugIDs []string) (*Artifact, 
 		a := &cands[i]
 		byName[a.Name] = a
 		byName[normalizePath(a.Name)] = a
+		// sentry-cli names artifacts "~/path/app.js" ("~" = any origin), so
+		// the artifact's bare basename is registered as a fallback key.
+		if b := pathBase(a.Name); b != "" && b != a.Name {
+			byName[b] = a
+		}
 		if a.DebugID != "" {
 			byDebug[a.DebugID] = a
 		}

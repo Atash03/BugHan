@@ -50,8 +50,10 @@ func (s *Server) registerTenancy(mux *http.ServeMux) {
 
 	mux.Handle("GET /api/0/", api(s.handleWhoami))
 	mux.Handle("GET /api/0/organizations/", api(s.handleListOrgs))
+	mux.Handle("GET /api/0/organizations/{org}/", api(notFound))
+	mux.Handle("GET /api/0/projects/{org}/{project}/", api(notFound))
 	mux.Handle("POST /api/0/organizations/", mutate(s.requireAuth(http.HandlerFunc(s.handleCreateOrg))))
-	mux.Handle("GET /api/0/organizations/{org}/", requireOrg(s.handleOrgDetail, "member"))
+	mux.Handle("GET /api/0/organizations/{org}/{$}", requireOrg(s.handleOrgDetail, "member"))
 	mux.Handle("GET /api/0/organizations/{org}/members/", requireOrg(s.handleListMembers, "member"))
 	mux.Handle("DELETE /api/0/organizations/{org}/members/{memberID}/", mutate(requireOrg(s.handleRemoveMember, "admin")))
 	mux.Handle("POST /api/0/organizations/{org}/invites/", mutate(requireOrg(s.handleCreateInvite, "admin")))
@@ -59,7 +61,7 @@ func (s *Server) registerTenancy(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/0/organizations/{org}/invites/{inviteID}/", mutate(requireOrg(s.handleDeleteInvite, "admin")))
 	mux.Handle("POST /api/0/organizations/{org}/projects/", mutate(requireOrg(s.handleCreateProject, "admin")))
 	mux.Handle("GET /api/0/organizations/{org}/projects/", requireOrg(s.handleListProjects, "member"))
-	mux.Handle("GET /api/0/projects/{org}/{project}/", requireProject(s.handleProjectDetail, "member"))
+	mux.Handle("GET /api/0/projects/{org}/{project}/{$}", requireProject(s.handleProjectDetail, "member"))
 	mux.Handle("GET /api/0/projects/{org}/{project}/keys/", requireProject(s.handleListKeys, "member"))
 	mux.Handle("POST /api/0/projects/{org}/{project}/keys/", mutate(requireProject(s.handleCreateKey, "admin")))
 	mux.Handle("DELETE /api/0/projects/{org}/{project}/keys/{keyID}/", mutate(requireProject(s.handleRevokeKey, "admin")))
@@ -99,6 +101,12 @@ func (s *Server) projectFromPath(r *http.Request) *project {
 		return nil
 	}
 	return &p
+}
+
+// notFound answers unmatched API subpaths with a JSON 404 (the ServeMux
+// default is text/plain), keeping unknown routes machine-readable.
+func notFound(w http.ResponseWriter, r *http.Request) {
+	writeErr(w, http.StatusNotFound, "not found")
 }
 
 func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {

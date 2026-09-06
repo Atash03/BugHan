@@ -84,13 +84,22 @@ func TestCreateReleaseConflictAndAuth(t *testing.T) {
 	path := "/api/0/organizations/" + org + "/releases/"
 	body := `{"version":"abc123","projects":["` + projectID + `"]}`
 
-	// First create succeeds; re-running the same sentry-cli step is a conflict.
+	// First create succeeds; re-running the same sentry-cli step is an
+	// idempotent re-associate → Sentry's 208 "Already Reported".
 	if rec := s.apiCall(t, "POST", path, body, jar{}, bearer); rec.Code != 201 {
 		t.Fatalf("first create = %d", rec.Code)
 	}
 	rec := s.apiCall(t, "POST", path, body, jar{}, bearer)
-	if rec.Code != http.StatusConflict {
+	if rec.Code != http.StatusAlreadyReported {
 		t.Fatalf("re-create = %d: %s", rec.Code, rec.Body.String())
+	}
+	var reassociated struct {
+		Version     string `json:"version"`
+		DateCreated string `json:"dateCreated"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &reassociated); err != nil ||
+		reassociated.Version != "abc123" || reassociated.DateCreated == "" {
+		t.Fatalf("re-create body = %s (%v)", rec.Body.String(), err)
 	}
 
 	// No Bearer token → 401.

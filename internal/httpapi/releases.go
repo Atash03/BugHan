@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,9 +14,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// sha256hex is the storage form of artifact checksums.
+// sha256hex is the storage form of artifact checksums; sha1hex only feeds the
+// response field sentry-cli expects.
 func sha256hex(b []byte) string {
 	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+func sha1hex(b []byte) string {
+	sum := sha1.Sum(b)
 	return hex.EncodeToString(sum[:])
 }
 
@@ -61,13 +68,19 @@ func (s *Server) registerReleases(mux *http.ServeMux) {
 	mux.Handle("POST /api/0/projects/{org}/{project}/releases/", mutate(requireProject(s.handleCreateReleaseProject, "admin")))
 	mux.Handle("GET /api/0/projects/{org}/{project}/releases/", requireProject(s.handleListReleasesProject, "member"))
 
-	// Release files (the artifact upload surface sentry-cli drives).
+	// Release files (the artifact upload surface sentry-cli drives). The
+	// org-scoped variants are what `sentry-cli releases files list/delete`
+	// uses; the project-scoped ones are the upload + list surface.
 	mux.Handle("POST /api/0/projects/{org}/{project}/releases/{version}/files/",
 		mutate(requireProject(s.handleUploadReleaseFile, "admin")))
 	mux.Handle("GET /api/0/projects/{org}/{project}/releases/{version}/files/",
 		requireProject(s.handleListReleaseFiles, "member"))
 	mux.Handle("DELETE /api/0/projects/{org}/{project}/releases/{version}/files/{fileID}/",
 		mutate(requireProject(s.handleDeleteReleaseFile, "admin")))
+	mux.Handle("GET /api/0/organizations/{org}/releases/{version}/files/",
+		requireOrg(s.handleListReleaseFilesOrg, "member"))
+	mux.Handle("DELETE /api/0/organizations/{org}/releases/{version}/files/{fileID}/",
+		mutate(requireOrg(s.handleDeleteReleaseFileOrg, "admin")))
 }
 
 // Upload caps (DESIGN.md §10): 50 MB per file, 500 MB per release. Vars so
@@ -98,38 +111,51 @@ func (s *Server) handleCreateReleaseOrg(w http.ResponseWriter, r *http.Request) 
 	if !decodeBody(w, r, &in) {
 		return
 	}
-	created, conflicted := s.createReleases(r, o.ID, in.Projects, in.Version)
+	created, allExisted := s.createReleases(r, o.ID, in.Projects, in.Version)
 	if len(created) == 0 {
-		if conflicted {
-			writeJSONStatus(w, http.StatusConflict, map[string]any{
-				"detail": "a release with this version already exists",
-				"version": in.Version, "projects": created,
-			})
+		if allExisted {
+			// Sentry's contract: release creation is idempotent; 208 marks
+			// the re-associate ("unique 2xx response code").
+			writeJSONStatus(w, http.StatusAlreadyReported, releaseBody(in.Version, []projectRef{}))
 			return
 		}
 		writeErr(w, http.StatusBadRequest, "release version and at least one project are required")
 		return
 	}
-	writeJSONStatus(w, http.StatusCreated, map[string]any{
-		"version": in.Version, "projects": created,
+	writeJSONStatus(w, http.StatusCreated, releaseBody(in.Version, created))
+}
+
+// releaseBody is the ReleaseInfo shape sentry-cli parses: projects as
+// {slug, name} objects and dateCreated as RFC3339.
+func releaseBody(version string, projects []projectRef) map[string]any {
+	return map[string]any{
+		"version": version, "projects": projects,
 		"status": "open", "firstEvent": nil, "lastEvent": nil,
-	})
+		"dateCreated": time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// projectRef is the {slug, name} shape sentry-cli parses (ProjectSlugAndName).
+type projectRef struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
 }
 
 // createReleases inserts one releases row per project reference (slug or id).
-// Returns the slugs of newly created rows and whether every row already existed.
-func (s *Server) createReleases(r *http.Request, orgID string, projectRefs []string, version string) (created []string, allExisted bool) {
+// Returns the {slug, name} refs of newly created rows and whether every row
+// already existed.
+func (s *Server) createReleases(r *http.Request, orgID string, projectRefs []string, version string) (created []projectRef, allExisted bool) {
 	version = strings.TrimSpace(version)
 	if version == "" || len(projectRefs) == 0 {
 		return nil, false
 	}
-	created = []string{}
+	created = []projectRef{}
 	newRows := 0
 	for _, ref := range projectRefs {
-		var projID, slug string
+		var projID, slug, name string
 		err := s.pool.QueryRow(r.Context(),
-			`SELECT id::text, slug FROM projects WHERE org_id = $1 AND (slug = $2 OR id::text = $2)`,
-			orgID, strings.TrimSpace(ref)).Scan(&projID, &slug)
+			`SELECT id::text, slug, name FROM projects WHERE org_id = $1 AND (slug = $2 OR id::text = $2)`,
+			orgID, strings.TrimSpace(ref)).Scan(&projID, &slug, &name)
 		if err != nil {
 			continue // unknown project reference: skipped, like Sentry
 		}
@@ -142,7 +168,7 @@ func (s *Server) createReleases(r *http.Request, orgID string, projectRefs []str
 			continue
 		}
 		newRows++
-		created = append(created, slug)
+		created = append(created, projectRef{Slug: slug, Name: name})
 	}
 	return created, newRows == 0 && len(projectRefs) > 0
 }
@@ -150,7 +176,7 @@ func (s *Server) createReleases(r *http.Request, orgID string, projectRefs []str
 func (s *Server) handleListReleasesOrg(w http.ResponseWriter, r *http.Request) {
 	o := s.orgFromPath(r)
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT DISTINCT ON (version) version, first_event_at::text, last_event_at::text, created_at::text
+		SELECT DISTINCT ON (version) version, first_event_at, last_event_at, created_at
 		FROM releases WHERE project_id IN (SELECT id FROM projects WHERE org_id = $1)
 		ORDER BY version, created_at DESC`, o.ID)
 	if err != nil {
@@ -173,24 +199,19 @@ func (s *Server) handleCreateReleaseProject(w http.ResponseWriter, r *http.Reque
 	created, allExisted := s.createReleases(r, p.OrgID, []string{p.ID}, in.Version)
 	if len(created) == 0 {
 		if allExisted {
-			writeJSONStatus(w, http.StatusConflict, map[string]any{
-				"detail": "a release with this version already exists", "version": in.Version,
-			})
+			writeJSONStatus(w, http.StatusAlreadyReported, releaseBody(in.Version, []projectRef{}))
 			return
 		}
 		writeErr(w, http.StatusBadRequest, "release version is required")
 		return
 	}
-	writeJSONStatus(w, http.StatusCreated, map[string]any{
-		"version": in.Version, "projects": created,
-		"status": "open", "firstEvent": nil, "lastEvent": nil,
-	})
+	writeJSONStatus(w, http.StatusCreated, releaseBody(in.Version, created))
 }
 
 func (s *Server) handleListReleasesProject(w http.ResponseWriter, r *http.Request) {
 	p := s.projectFromPath(r)
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT version, first_event_at::text, last_event_at::text, created_at::text
+		SELECT version, first_event_at, last_event_at, created_at
 		FROM releases WHERE project_id = $1
 		ORDER BY created_at DESC`, p.ID)
 	if err != nil {
@@ -207,18 +228,19 @@ func scanReleases(rows interface {
 }) []map[string]any {
 	out := []map[string]any{}
 	for rows.Next() {
-		var version, created string
-		var first, last *string
+		var version string
+		var created time.Time
+		var first, last *time.Time
 		if err := rows.Scan(&version, &first, &last, &created); err != nil {
 			continue
 		}
 		out = append(out, map[string]any{
-			"version":     version,
+			"version":      version,
 			"shortVersion": version,
-			"status":      "open",
-			"firstEvent":  first,
-			"lastEvent":   last,
-			"dateCreated": created,
+			"status":       "open",
+			"firstEvent":   first,
+			"lastEvent":    last,
+			"dateCreated":  created,
 		})
 	}
 	return out
@@ -334,21 +356,26 @@ func (s *Server) handleUploadReleaseFile(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSONStatus(w, http.StatusCreated, serializeReleaseFile(id, name, dist, headers, content, sum))
+	resp := serializeReleaseFile(id, name, dist, headers, content, sum)
+	resp["sha1"] = sha1hex(body)
+	writeJSONStatus(w, http.StatusCreated, resp)
 }
 
 func (s *Server) writeReleaseFileByID(w http.ResponseWriter, r *http.Request, id string) {
 	var name, dist, sum string
 	var size int64
 	var hdrs map[string]string
+	var body []byte
 	err := s.pool.QueryRow(r.Context(), `
-		SELECT name, dist, sha256, size, headers FROM release_files WHERE id = $1 AND project_id = $2`,
-		id, s.projectFromPath(r).ID).Scan(&name, &dist, &sum, &size, &hdrs)
+		SELECT name, dist, sha256, size, headers, body FROM release_files WHERE id = $1 AND project_id = $2`,
+		id, s.projectFromPath(r).ID).Scan(&name, &dist, &sum, &size, &hdrs, &body)
 	if err != nil {
 		writeErr(w, 404, "file not found")
 		return
 	}
-	writeJSONStatus(w, http.StatusOK, serializeReleaseFile(id, name, dist, hdrs, size, sum))
+	resp := serializeReleaseFile(id, name, dist, hdrs, size, sum)
+	resp["sha1"] = sha1hex(body)
+	writeJSONStatus(w, http.StatusOK, resp)
 }
 
 func serializeReleaseFile(id, name, dist string, headers map[string]string, size int64, sha string) map[string]any {
@@ -356,9 +383,10 @@ func serializeReleaseFile(id, name, dist string, headers map[string]string, size
 	if dist != "" {
 		distOut = dist
 	}
+	// sentry-cli's Artifact parser requires sha1; sha256 is BugHan's dedupe key.
 	return map[string]any{
 		"id": id, "name": name, "dist": distOut, "size": size,
-		"sha256": sha, "headers": headers, "dateCreated": time.Now().UTC().Format(time.RFC3339),
+		"sha256": sha, "sha1": sha, "headers": headers, "dateCreated": time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -380,6 +408,13 @@ func (s *Server) handleListReleaseFiles(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer rows.Close()
+	writeJSON(w, scanReleaseFiles(rows))
+}
+
+func scanReleaseFiles(rows interface {
+	Next() bool
+	Scan(dest ...any) error
+}) []map[string]any {
 	out := []map[string]any{}
 	for rows.Next() {
 		var id, name, dist, sha, created string
@@ -392,7 +427,7 @@ func (s *Server) handleListReleaseFiles(w http.ResponseWriter, r *http.Request) 
 		entry["dateCreated"] = created
 		out = append(out, entry)
 	}
-	writeJSON(w, out)
+	return out
 }
 
 func (s *Server) handleDeleteReleaseFile(w http.ResponseWriter, r *http.Request) {
@@ -400,6 +435,50 @@ func (s *Server) handleDeleteReleaseFile(w http.ResponseWriter, r *http.Request)
 	ct, err := s.pool.Exec(r.Context(),
 		`DELETE FROM release_files WHERE id = $1 AND project_id = $2 AND release = $3`,
 		r.PathValue("fileID"), p.ID, r.PathValue("version"))
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		writeErr(w, http.StatusNotFound, "file not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListReleaseFilesOrg lists a version's files across all of the org's
+// projects (Sentry treats org releases as an aggregate).
+func (s *Server) handleListReleaseFilesOrg(w http.ResponseWriter, r *http.Request) {
+	o := s.orgFromPath(r)
+	version := r.PathValue("version")
+	var exists bool
+	if err := s.pool.QueryRow(r.Context(),
+		`SELECT true FROM releases WHERE version = $1
+		 AND project_id IN (SELECT id FROM projects WHERE org_id = $2)`,
+		version, o.ID).Scan(&exists); err != nil {
+		writeErr(w, http.StatusNotFound, "release not found")
+		return
+	}
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT f.id::text, f.name, f.dist, f.size, f.sha256, f.headers, f.created_at::text
+		FROM release_files f
+		JOIN projects p ON p.id = f.project_id
+		WHERE p.org_id = $1 AND f.release = $2 ORDER BY f.name`, o.ID, version)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	writeJSON(w, scanReleaseFiles(rows))
+}
+
+func (s *Server) handleDeleteReleaseFileOrg(w http.ResponseWriter, r *http.Request) {
+	o := s.orgFromPath(r)
+	ct, err := s.pool.Exec(r.Context(), `
+		DELETE FROM release_files f USING projects p
+		WHERE f.project_id = p.id AND p.org_id = $1
+		  AND f.id = $2 AND f.release = $3`,
+		o.ID, r.PathValue("fileID"), r.PathValue("version"))
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
