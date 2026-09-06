@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -128,6 +129,17 @@ func TestEnvelopeIngestEndToEnd(t *testing.T) {
 		t.Fatalf("feedback = %+v err=%v", fb, err)
 	}
 
+	// Feedback re-sent with the same envelope event_id → deduped, still 200.
+	rec = s.postEnvelope(t, projectID, key, feedbackEnvelopeTest, "")
+	if rec.Code != 200 {
+		t.Fatalf("feedback re-send = %d: %s", rec.Code, rec.Body.String())
+	}
+	var fbCount int
+	_ = s.pool.QueryRow(t.Context(), `SELECT count(*) FROM feedbacks WHERE project_id = $1`, projectID).Scan(&fbCount)
+	if fbCount != 1 {
+		t.Fatalf("feedback dedupe failed: %d rows", fbCount)
+	}
+
 	// client_report + unknown item types → tolerated, counted, not stored as events.
 	rec = s.postEnvelope(t, projectID, key, clientReportWithUnknownTest, "")
 	if rec.Code != 200 {
@@ -149,6 +161,16 @@ func TestEnvelopeIngestEndToEnd(t *testing.T) {
 	rec = s.postEnvelope(t, projectID, key, buf.String(), "gzip")
 	if rec.Code != 200 {
 		t.Fatalf("gzipped envelope = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Zlib-wrapped deflate (what real SDKs emit) → accepted.
+	var zbuf bytes.Buffer
+	zw2 := zlib.NewWriter(&zbuf)
+	_, _ = zw2.Write([]byte(errorEnvelopeTest))
+	_ = zw2.Close()
+	rec = s.postEnvelope(t, projectID, key, zbuf.String(), "deflate")
+	if rec.Code != 200 {
+		t.Fatalf("zlib-deflated envelope = %d: %s", rec.Code, rec.Body.String())
 	}
 
 	// Bad key → 403.

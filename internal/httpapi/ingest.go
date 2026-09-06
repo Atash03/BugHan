@@ -144,8 +144,14 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request, authCache *
 		writeIngestErr(w, http.StatusBadRequest, "event rejected: "+err.Error())
 		return
 	}
+	// eventID is raw JSON — decode to a plain string so the response id
+	// isn't double-quoted.
+	var idStr string
+	if eventID != nil {
+		_ = json.Unmarshal(eventID, &idStr)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"id": string(eventID), "accepted": res.Accepted})
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": idStr, "accepted": res.Accepted})
 }
 
 // readIngestBody enforces the raw body cap and decompresses per

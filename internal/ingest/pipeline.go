@@ -73,7 +73,7 @@ func (p *Processor) Process(ctx context.Context, env *Envelope, projectID string
 			}
 			res.Accepted++
 		case "feedback", "user_report":
-			if err := p.storeFeedback(ctx, tx, item, projectID); err != nil {
+			if err := p.storeFeedback(ctx, tx, env, item, projectID); err != nil {
 				return res, fmt.Errorf("%s item: %w", item.Header.Type, err)
 			}
 			res.Accepted++

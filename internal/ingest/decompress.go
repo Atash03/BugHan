@@ -1,8 +1,11 @@
 package ingest
 
 import (
+	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -29,10 +32,27 @@ func Decompress(r io.Reader, contentEncoding string, maxBytes int64) ([]byte, er
 		defer zr.Close()
 		dec = zr
 	case "deflate":
-		// Sentry SDKs emit zlib-wrapped deflate; fall back to raw flate.
-		zr := flate.NewReader(limited)
-		defer zr.Close()
-		dec = zr
+		// SDKs emit zlib-wrapped deflate (pako default); raw DEFLATE is the
+		// fallback for senders that skip the zlib wrapper. Both decoders must
+		// see the same bytes, so the body is buffered once.
+		raw, err := io.ReadAll(limited)
+		if err != nil {
+			return nil, fmt.Errorf("read body: %w", err)
+		}
+		if len(raw) == 0 {
+			return raw, nil
+		}
+		if zr, zerr := zlib.NewReader(bytes.NewReader(raw)); zerr == nil {
+			out, derr := readCapped(zr, maxBytes)
+			zr.Close()
+			if derr == nil {
+				return out, nil
+			}
+			if errors.Is(derr, ErrTooLarge) {
+				return nil, derr
+			}
+		}
+		return readCapped(flate.NewReader(bytes.NewReader(raw)), maxBytes)
 	case "br":
 		dec = brotli.NewReader(limited)
 	case "zstd":
@@ -46,6 +66,10 @@ func Decompress(r io.Reader, contentEncoding string, maxBytes int64) ([]byte, er
 		return nil, fmt.Errorf("unsupported content-encoding %q", contentEncoding)
 	}
 
+	return readCapped(dec, maxBytes)
+}
+
+func readCapped(dec io.Reader, maxBytes int64) ([]byte, error) {
 	out, err := io.ReadAll(io.LimitReader(dec, maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("decompress: %w", err)

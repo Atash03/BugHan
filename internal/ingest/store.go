@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,19 +52,41 @@ func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, it
 	tagsJSON, _ := json.Marshal(tags)
 	payloadJSON := json.RawMessage(item.Payload)
 
+	norm, err := normalizeEvent(item.Payload)
+	if err != nil {
+		return false, fmt.Errorf("normalize: %w", err)
+	}
+
 	ct, err := tx.Exec(ctx, `
 		INSERT INTO events_part
 			(id, project_id, timestamp, platform, level, environment, release, dist,
-			 message, type, trace_id, span_id, user_hash, tags, payload)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'error',$10,$11,$12,$13,$14)
+			 title, culprit, message, type, trace_id, span_id, user_hash, tags, payload)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'error',$12,$13,$14,$15,$16)
 		ON CONFLICT (id, timestamp) DO NOTHING`,
 		id, projectID, ts, payload.Platform, level, environment, payload.Release, payload.Dist,
-		payload.Message, traceID, payload.Contexts.Trace.SpanID, userHash(payload.User), tagsJSON, payloadJSON)
+		norm.Title, norm.Culprit, payload.Message, traceID, payload.Contexts.Trace.SpanID,
+		userHash(payload.User), tagsJSON, payloadJSON)
 	if err != nil {
 		return false, err
 	}
 	if ct.RowsAffected() == 0 {
-		return true, nil
+		return true, nil // dedupe: PK conflict → 200 no-op, no counters
+	}
+
+	issueID, err := p.upsertIssue(ctx, tx, projectID, norm, level, userHash(payload.User), ts)
+	if err != nil {
+		return false, fmt.Errorf("issue upsert: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE events_part SET issue_id = $2 WHERE id = $1 AND timestamp = $3`,
+		id, issueID, ts); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO event_rollups (issue_id, hour, count) VALUES ($1, $2, 1)
+		ON CONFLICT (issue_id, hour) DO UPDATE SET count = event_rollups.count + 1`,
+		issueID, ts.Truncate(time.Hour)); err != nil {
+		return false, err
 	}
 	if err := touchRelease(ctx, tx, projectID, payload.Release, ts); err != nil {
 		return false, err
@@ -73,6 +96,50 @@ func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, it
 		ON CONFLICT (project_id, hour) DO UPDATE SET count = project_event_rollups.count + 1`,
 		projectID, ts.Truncate(time.Hour))
 	return false, nil
+}
+
+// upsertIssue creates or folds the event into its issue: counters (count,
+// distinct user_count), first/last seen, latest level, and the
+// resolved→regressed transition (ignored issues absorb silently).
+func (p *Processor) upsertIssue(ctx context.Context, tx pgx.Tx, projectID string, norm normalizedEvent, level, userHashVal string, ts time.Time) (string, error) {
+	var issueID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO issues (id, project_id, fingerprint, grouping_version,
+			title, culprit, type, level, first_seen, last_seen, count)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'error', $6, $7, $7, 1)
+		ON CONFLICT (project_id, fingerprint) DO UPDATE SET
+			count      = issues.count + 1,
+			last_seen  = GREATEST(issues.last_seen, EXCLUDED.last_seen),
+			level      = EXCLUDED.level,
+			title      = EXCLUDED.title,
+			culprit    = EXCLUDED.culprit,
+			status     = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END,
+			substatus  = CASE WHEN issues.status = 'resolved' THEN 'regressed' ELSE issues.substatus END
+		RETURNING id`,
+		projectID, norm.Fingerprint, groupingVersion, norm.Title, norm.Culprit,
+		level, ts).Scan(&issueID); err != nil {
+		return "", err
+	}
+	if userHashVal != "" {
+		// user_count tracks distinct affected users: bump only when the hash
+		// is new. The insert is the arbiter (unique constraint), so concurrent
+		// events for the same user can't double-count.
+		ct, err := tx.Exec(ctx, `
+			INSERT INTO issue_user_hashes (issue_id, user_hash)
+			VALUES ($1, $2) ON CONFLICT (issue_id, user_hash) DO NOTHING`,
+			issueID, userHashVal)
+		if err != nil {
+			return "", err
+		}
+		if ct.RowsAffected() > 0 {
+			if _, err := tx.Exec(ctx,
+				`UPDATE issues SET user_count = user_count + 1 WHERE id = $1`,
+				issueID); err != nil {
+				return "", err
+			}
+		}
+	}
+	return issueID, nil
 }
 
 // storeTransaction persists one transaction (spans stay in the payload).
@@ -265,7 +332,6 @@ func (p *Processor) storeSessionAggregates(ctx context.Context, tx pgx.Tx, item 
 		}
 		// Aggregates are minute-rounded per spec; bucket to the hour.
 		hour := started.Truncate(time.Hour)
-		_ = hour
 		total := a.Exited + a.Abnormal + a.Crashed + a.Errored
 		if total == 0 {
 			continue
@@ -291,8 +357,10 @@ func (p *Processor) storeSessionAggregates(ctx context.Context, tx pgx.Tx, item 
 }
 
 // storeFeedback persists feedback (SDK v8 `feedback` items) and legacy
-// `user_report` items into the same table.
-func (p *Processor) storeFeedback(ctx context.Context, tx pgx.Tx, item Item, projectID string) error {
+// `user_report` items into the same table. The envelope header event_id is
+// the report's id (payload event_id on user_report references the associated
+// event instead); it doubles as the dedupe key per the ticket contract.
+func (p *Processor) storeFeedback(ctx context.Context, tx pgx.Tx, env *Envelope, item Item, projectID string) error {
 	switch item.Header.Type {
 	case "feedback":
 		var f struct {
@@ -314,12 +382,7 @@ func (p *Processor) storeFeedback(ctx context.Context, tx pgx.Tx, item Item, pro
 		if f.Contexts.Feedback.Message == "" {
 			return fmt.Errorf("missing contexts.feedback.message (required)")
 		}
-		id := uuid.New()
-		if envID := envOrPayloadID(item, f.EventID); envID != "" {
-			if parsed, err := uuid.Parse(envID); err == nil {
-				id = parsed
-			}
-		}
+		id := feedbackID(env, f.EventID)
 		var assoc uuid.NullUUID
 		if f.Contexts.Feedback.AssociatedEventID != "" {
 			if parsed, err := uuid.Parse(f.Contexts.Feedback.AssociatedEventID); err == nil {
@@ -328,7 +391,8 @@ func (p *Processor) storeFeedback(ctx context.Context, tx pgx.Tx, item Item, pro
 		}
 		_, err := tx.Exec(ctx, `
 			INSERT INTO feedbacks (id, project_id, associated_event_id, name, contact_email, message, url, payload)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			ON CONFLICT (id) DO NOTHING`,
 			id, projectID, assoc, f.Contexts.Feedback.Name, f.Contexts.Feedback.ContactEmail,
 			f.Contexts.Feedback.Message, f.Contexts.Feedback.URL, json.RawMessage(item.Payload))
 		return err
@@ -350,17 +414,28 @@ func (p *Processor) storeFeedback(ctx context.Context, tx pgx.Tx, item Item, pro
 		}
 		_, err := tx.Exec(ctx, `
 			INSERT INTO feedbacks (id, project_id, associated_event_id, name, contact_email, message, payload)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			uuid.New(), projectID, assoc, r.Name, r.Email, r.Comments, json.RawMessage(item.Payload))
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			ON CONFLICT (id) DO NOTHING`,
+			feedbackID(env, ""), projectID, assoc, r.Name, r.Email, r.Comments, json.RawMessage(item.Payload))
 		return err
 	}
 	return fmt.Errorf("not a feedback item")
 }
 
-func envOrPayloadID(item Item, payloadID string) string {
-	// The envelope header id wins; the feedback payload itself has no id field
-	// in the feedback interface, so payloadID is usually empty here.
-	return payloadID
+// feedbackID resolves the feedback row id: the envelope header event_id when
+// present, else the payload id, else a fresh uuid (which cannot dedupe).
+func feedbackID(env *Envelope, payloadID string) uuid.UUID {
+	if env != nil && env.Header.EventID != "" {
+		if id, err := uuid.Parse(strings.ToLower(env.Header.EventID)); err == nil {
+			return id
+		}
+	}
+	if payloadID != "" {
+		if id, err := uuid.Parse(strings.ToLower(payloadID)); err == nil {
+			return id
+		}
+	}
+	return uuid.New()
 }
 
 func sha256Sum(s string) [32]byte { return sha256.Sum256([]byte(s)) }
