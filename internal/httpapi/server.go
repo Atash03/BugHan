@@ -51,6 +51,9 @@ func (s *Server) Handler() http.Handler {
 	// SDK-facing ingest is registered by the ingest slice.
 	s.registerIngest(mux)
 
+	// Issues API: list, triage, activity, saved views, data wipe (T5).
+	s.registerIssues(mux)
+
 	return s.loadPrincipal(s.logRequests(mux))
 }
 

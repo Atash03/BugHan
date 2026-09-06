@@ -102,6 +102,30 @@ func setupAccount(t *testing.T, s *Server, email string) jar {
 	return captureCookies(rec)
 }
 
+// TestCreateOrgDuplicateSlug: creating an org whose slug already exists is a
+// 400, not a 500 that half-inserts state (regression for the ON CONFLICT
+// membership bug surfaced by the T5 work).
+func TestCreateOrgDuplicateSlug(t *testing.T) {
+	s := newTestServer(t)
+	setupAccount(t, s, "neo@acme.dev")
+	sess, csrf := login(t, s, "neo@acme.dev", "hunter2hunter2")
+	rec := s.apiCall(t, "POST", "/api/0/tokens/", `{"name":"it"}`, sess, map[string]string{"X-CSRF-Token": csrf})
+	var tok struct{ Token string }
+	_ = json.Unmarshal(rec.Body.Bytes(), &tok)
+	bearer := map[string]string{"Authorization": "Bearer " + tok.Token}
+
+	// "Acme Corp" already exists from setup; the same slug must be rejected.
+	rec = s.apiCall(t, "POST", "/api/0/organizations/", `{"name":"Acme Corp"}`, jar{}, bearer)
+	if rec.Code != 400 {
+		t.Fatalf("duplicate org slug = %d (want 400): %s", rec.Code, rec.Body.String())
+	}
+	var n int
+	_ = s.pool.QueryRow(t.Context(), `SELECT count(*) FROM organizations WHERE slug = 'acme-corp'`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("org count for slug = %d (want 1)", n)
+	}
+}
+
 func TestSetupLoginLogout(t *testing.T) {
 	s := newTestServer(t)
 
