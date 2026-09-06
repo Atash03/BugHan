@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -16,8 +17,10 @@ func (s *Server) loadPrincipal(next http.Handler) http.Handler {
 		if strings.HasPrefix(authz, "Bearer ") {
 			token := strings.TrimSpace(strings.TrimPrefix(authz, "Bearer "))
 			if auth.ValidAPITokenShape(token) {
-				if u := s.userForAPIToken(r, token); u != nil {
-					r = r.WithContext(auth.WithUser(r.Context(), u, ""))
+				if u, scope := s.userForAPIToken(r, token); u != nil {
+					ctx := auth.WithUser(r.Context(), u, "")
+					ctx = context.WithValue(ctx, principalScopeKey{}, scope)
+					r = r.WithContext(ctx)
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -34,6 +37,15 @@ func (s *Server) loadPrincipal(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// principalScopeKey carries the credential kind: "read" or "write" for API
+// tokens, "" for sessions (full user authority).
+type principalScopeKey struct{}
+
+func principalScope(ctx context.Context) string {
+	v, _ := ctx.Value(principalScopeKey{}).(string)
+	return v
 }
 
 // requireAuth 401s unauthenticated callers.
@@ -117,10 +129,10 @@ func (s *Server) userForSession(r *http.Request, userID string) (*auth.User, str
 	return u, csrf
 }
 
-// userForAPIToken resolves a Bearer token to its owner.
-func (s *Server) userForAPIToken(r *http.Request, token string) *auth.User {
+// userForAPIToken resolves a Bearer token to its owner and scope.
+func (s *Server) userForAPIToken(r *http.Request, token string) (*auth.User, string) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT u.id, u.email, u.name,
+		SELECT u.id, u.email, u.name, t.scope,
 		       COALESCE(m.org_id::text, ''), COALESCE(m.role, ''), COALESCE(o.slug, '')
 		FROM api_tokens t
 		JOIN users u ON u.id = t.user_id
@@ -128,17 +140,31 @@ func (s *Server) userForAPIToken(r *http.Request, token string) *auth.User {
 		LEFT JOIN organizations o ON o.id = m.org_id
 		WHERE t.token_hash = $1 AND t.revoked_at IS NULL`, auth.HashToken(token))
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	defer rows.Close()
-	u, ok := scanMemberRows(rows)
-	if !ok {
-		return nil
+	var scope string
+	var u *auth.User
+	for rows.Next() {
+		var m memberRow
+		if err := rows.Scan(&m.id, &m.email, &m.name, &scope, &m.orgID, &m.role, &m.orgSlug); err != nil {
+			return nil, ""
+		}
+		if u == nil {
+			u = &auth.User{ID: m.id, Email: m.email, Name: m.name, Memberships: map[string]string{}}
+		}
+		if m.orgID != "" {
+			u.Memberships[m.orgID] = m.role
+			u.Memberships[m.orgSlug] = m.role
+		}
+	}
+	if u == nil {
+		return nil, ""
 	}
 	_, _ = s.pool.Exec(r.Context(), `UPDATE api_tokens SET last_used_at = now()
 		WHERE token_hash = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`,
 		auth.HashToken(token))
-	return u
+	return u, scope
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
