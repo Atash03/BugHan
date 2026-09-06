@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${BUGHAN_DB_USER:-bughan}
+      POSTGRES_PASSWORD: ${BUGHAN_DB_PASSWORD:-bughan}
+      POSTGRES_DB: ${BUGHAN_DB_NAME:-bughan}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BUGHAN_DB_USER:-bughan} -d ${BUGHAN_DB_NAME:-bughan}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    image: ghcr.io/atash03/bughan:latest
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${BUGHAN_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgres://${BUGHAN_DB_USER:-bughan}:${BUGHAN_DB_PASSWORD:-bughan}@db:5432/${BUGHAN_DB_NAME:-bughan}
+      BUGHAN_SECRET_KEY: ${BUGHAN_SECRET_KEY:?set BUGHAN_SECRET_KEY in .env}
+      BUGHAN_URL: ${BUGHAN_URL:-http://localhost:8000}
+      BUGHAN_BIND: ":8000"
+      BUGHAN_SINGLE_ORG: ${BUGHAN_SINGLE_ORG:-false}
+      BUGHAN_RETENTION_EVENT_DAYS: ${BUGHAN_RETENTION_EVENT_DAYS:-90}
+      BUGHAN_RETENTION_TRANSACTION_DAYS: ${BUGHAN_RETENTION_TRANSACTION_DAYS:-30}
+      BUGHAN_RETENTION_SESSION_DAYS: ${BUGHAN_RETENTION_SESSION_DAYS:-30}
+      BUGHAN_RETENTION_FEEDBACK_DAYS: ${BUGHAN_RETENTION_FEEDBACK_DAYS:-90}
+      BUGHAN_MAX_EVENT_MB: ${BUGHAN_MAX_EVENT_MB:-20}
+      BUGHAN_SMTP_HOST: ${BUGHAN_SMTP_HOST:-}
+      BUGHAN_SMTP_PORT: ${BUGHAN_SMTP_PORT:-587}
+      BUGHAN_SMTP_USER: ${BUGHAN_SMTP_USER:-}
+      BUGHAN_SMTP_PASS: ${BUGHAN_SMTP_PASS:-}
+      BUGHAN_SMTP_FROM: ${BUGHAN_SMTP_FROM:-}
+
+volumes:
+  pgdata:
