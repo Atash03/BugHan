@@ -51,8 +51,14 @@ func (s *Server) Handler() http.Handler {
 	// Classic release-files API (sentry-cli surface).
 	s.registerReleases(mux)
 
+	// Performance plane (summaries, transaction detail, traces, release health).
+	s.registerPerformance(mux)
+
 	// SDK-facing ingest is registered by the ingest slice.
 	s.registerIngest(mux)
+
+	// Issues API: list, triage, activity, saved views, data wipe (T5).
+	s.registerIssues(mux)
 
 	return s.loadPrincipal(s.logRequests(mux))
 }

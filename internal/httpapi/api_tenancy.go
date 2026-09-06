@@ -2,11 +2,13 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/Atash03/BugHan/internal/auth"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func (s *Server) registerTenancy(mux *http.ServeMux) {
@@ -157,9 +159,13 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 	err := s.pool.QueryRow(r.Context(), `
 		INSERT INTO organizations (id, name, slug)
 		VALUES ($1, $2, $3)
-		ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
 		RETURNING slug`, id, strings.TrimSpace(in.Name), slug).Scan(&finalSlug)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			writeErr(w, http.StatusBadRequest, "an organization with this name already exists")
+			return
+		}
 		writeErr(w, 500, err.Error())
 		return
 	}
