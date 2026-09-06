@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -110,7 +111,7 @@ func runServe(log *slog.Logger) {
 	}()
 
 	log.Info("bughan listening", "addr", cfg.BindAddr, "public_url", cfg.PublicURL)
-	if err := httpSrv.ListenAndServe(); err != nil && err != context.Canceled {
+	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server", "err", err)
 		os.Exit(1)
 	}
