@@ -61,7 +61,7 @@ func DropPartitions(ctx context.Context, pool *pgxpool.Pool, table string, cutof
 		_, rest, _ := strings.Cut(p.bound, "TO")
 		_, tsStr, _ := strings.Cut(rest, "'")
 		tsStr, _, _ = strings.Cut(tsStr, "'")
-		to, err := time.Parse(time.RFC3339, tsStr)
+		to, err := parsePartitionTimestamp(tsStr)
 		if err != nil {
 			continue
 		}
@@ -72,4 +72,21 @@ func DropPartitions(ctx context.Context, pool *pgxpool.Pool, table string, cutof
 		}
 	}
 	return nil
+}
+
+// parsePartitionTimestamp accepts both the RFC3339 literal we create bounds
+// with and the space-separated, server-timezone form Postgres normalizes them
+// to in pg_get_expr (e.g. 2026-02-01 05:00:00+05).
+func parsePartitionTimestamp(s string) (time.Time, error) {
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05-07",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unparseable partition bound timestamp %q", s)
 }

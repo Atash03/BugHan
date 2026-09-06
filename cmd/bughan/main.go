@@ -18,6 +18,7 @@ import (
 	"github.com/Atash03/BugHan/internal/config"
 	"github.com/Atash03/BugHan/internal/db"
 	"github.com/Atash03/BugHan/internal/httpapi"
+	"github.com/Atash03/BugHan/internal/worker"
 	"golang.org/x/term"
 )
 
@@ -102,6 +103,23 @@ func runServe(log *slog.Logger) {
 
 	srv := httpapi.New(cfg, pool, log)
 	httpSrv := &http.Server{Addr: cfg.BindAddr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+
+	if cfg.WorkerEmbedded {
+		w := worker.New(pool, log)
+		if err := w.RegisterRetention(worker.RetentionConfig{
+			EventDays:         cfg.RetentionEventDays,
+			TransactionDays:   cfg.RetentionTransactionDays,
+			SessionDays:       cfg.RetentionSessionDays,
+			SessionRollupDays: cfg.RetentionSessionDays * 3, // rollups outlive raw sessions
+			FeedbackDays:      cfg.RetentionFeedbackDays,
+			ReleaseFileDays:   cfg.RetentionReleaseDays,
+		}); err != nil {
+			log.Error("schedule retention sweep", "err", err)
+			os.Exit(1)
+		}
+		go w.Start(ctx)
+		log.Info("embedded worker started")
+	}
 
 	go func() {
 		<-ctx.Done()
