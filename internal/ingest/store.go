@@ -51,6 +51,7 @@ func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, it
 	tags := parseTags(payload.Tags)
 	tagsJSON, _ := json.Marshal(tags)
 	payloadJSON := json.RawMessage(item.Payload)
+	affectedUserHash := userHash(payload.User)
 
 	norm, err := normalizeEvent(item.Payload)
 	if err != nil {
@@ -65,7 +66,7 @@ func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, it
 		ON CONFLICT (id, timestamp) DO NOTHING`,
 		id, projectID, ts, payload.Platform, level, environment, payload.Release, payload.Dist,
 		norm.Title, norm.Culprit, payload.Message, traceID, payload.Contexts.Trace.SpanID,
-		userHash(payload.User), tagsJSON, payloadJSON)
+		affectedUserHash, tagsJSON, payloadJSON)
 	if err != nil {
 		return false, err
 	}
@@ -73,7 +74,7 @@ func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, it
 		return true, nil // dedupe: PK conflict → 200 no-op, no counters
 	}
 
-	issueID, err := p.upsertIssue(ctx, tx, projectID, norm, level, userHash(payload.User), ts)
+	issueID, err := p.upsertIssue(ctx, tx, projectID, norm, level, affectedUserHash, ts)
 	if err != nil {
 		return false, fmt.Errorf("issue upsert: %w", err)
 	}
