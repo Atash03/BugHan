@@ -3,8 +3,10 @@ module github.com/Atash03/BugHan
 go 1.25.0
 
 require (
+	github.com/andybalholm/brotli v1.2.3
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.4
+	github.com/klauspost/compress v1.20.0
 	golang.org/x/crypto v0.33.0
 	golang.org/x/term v0.45.0
 )

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -75,6 +76,13 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 	}
+
+	// Partitioned telemetry tables need monthly partitions to exist before
+	// the first insert.
+	now := time.Now().UTC()
+	if err := EnsurePartitions(ctx, pool, []time.Time{now, now.AddDate(0, 1, 0)}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -118,4 +126,12 @@ func loadMigrations() ([]migration, error) {
 		}
 	}
 	return migs, nil
+}
+
+// ensureMonthlyPartitions creates partitions for the current and next month
+// so fresh installs can ingest immediately; the retention sweep keeps future
+// months created.
+func ensureMonthlyPartitions(ctx context.Context, pool *pgxpool.Pool) error {
+	now := time.Now().UTC()
+	return EnsurePartitions(ctx, pool, []time.Time{now, now.AddDate(0, 1, 0)})
 }

@@ -16,7 +16,7 @@ import (
 
 func newTestServer(t *testing.T) *Server {
 	pool := testdb.New(t)
-	cfg := &config.Config{PublicURL: "http://localhost:8000", SecretKey: "test-secret"}
+	cfg := &config.Config{PublicURL: "http://localhost:8000", SecretKey: "test-secret", MaxEventBytes: 20 << 20}
 	return New(cfg, pool, slog.Default())
 }
 

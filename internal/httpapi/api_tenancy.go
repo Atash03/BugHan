@@ -13,6 +13,11 @@ func (s *Server) registerTenancy(mux *http.ServeMux) {
 	api := func(h http.HandlerFunc) http.Handler {
 		return s.requireAuth(h)
 	}
+	// State-changing API routes additionally enforce CSRF for session
+	// callers; Bearer-token callers are exempt (no ambient credentials).
+	mutate := func(h http.Handler) http.Handler {
+		return s.requireCSRF(h)
+	}
 	// requireOrg loads {org} from the path and checks the requester's role.
 	requireOrg := func(h http.HandlerFunc, minRole string) http.Handler {
 		return api(func(w http.ResponseWriter, r *http.Request) {
@@ -45,22 +50,22 @@ func (s *Server) registerTenancy(mux *http.ServeMux) {
 
 	mux.Handle("GET /api/0/", api(s.handleWhoami))
 	mux.Handle("GET /api/0/organizations/", api(s.handleListOrgs))
-	mux.Handle("POST /api/0/organizations/", api(s.handleCreateOrg))
+	mux.Handle("POST /api/0/organizations/", mutate(s.requireAuth(http.HandlerFunc(s.handleCreateOrg))))
 	mux.Handle("GET /api/0/organizations/{org}/", requireOrg(s.handleOrgDetail, "member"))
 	mux.Handle("GET /api/0/organizations/{org}/members/", requireOrg(s.handleListMembers, "member"))
-	mux.Handle("DELETE /api/0/organizations/{org}/members/{memberID}/", requireOrg(s.handleRemoveMember, "admin"))
-	mux.Handle("POST /api/0/organizations/{org}/invites/", requireOrg(s.handleCreateInvite, "admin"))
+	mux.Handle("DELETE /api/0/organizations/{org}/members/{memberID}/", mutate(requireOrg(s.handleRemoveMember, "admin")))
+	mux.Handle("POST /api/0/organizations/{org}/invites/", mutate(requireOrg(s.handleCreateInvite, "admin")))
 	mux.Handle("GET /api/0/organizations/{org}/invites/", requireOrg(s.handleListInvites, "admin"))
-	mux.Handle("DELETE /api/0/organizations/{org}/invites/{inviteID}/", requireOrg(s.handleDeleteInvite, "admin"))
-	mux.Handle("POST /api/0/organizations/{org}/projects/", requireOrg(s.handleCreateProject, "admin"))
+	mux.Handle("DELETE /api/0/organizations/{org}/invites/{inviteID}/", mutate(requireOrg(s.handleDeleteInvite, "admin")))
+	mux.Handle("POST /api/0/organizations/{org}/projects/", mutate(requireOrg(s.handleCreateProject, "admin")))
 	mux.Handle("GET /api/0/organizations/{org}/projects/", requireOrg(s.handleListProjects, "member"))
 	mux.Handle("GET /api/0/projects/{org}/{project}/", requireProject(s.handleProjectDetail, "member"))
 	mux.Handle("GET /api/0/projects/{org}/{project}/keys/", requireProject(s.handleListKeys, "member"))
-	mux.Handle("POST /api/0/projects/{org}/{project}/keys/", requireProject(s.handleCreateKey, "admin"))
-	mux.Handle("DELETE /api/0/projects/{org}/{project}/keys/{keyID}/", requireProject(s.handleRevokeKey, "admin"))
+	mux.Handle("POST /api/0/projects/{org}/{project}/keys/", mutate(requireProject(s.handleCreateKey, "admin")))
+	mux.Handle("DELETE /api/0/projects/{org}/{project}/keys/{keyID}/", mutate(requireProject(s.handleRevokeKey, "admin")))
 	mux.Handle("GET /api/0/tokens/", api(s.handleListTokens))
-	mux.Handle("POST /api/0/tokens/", api(s.handleCreateToken))
-	mux.Handle("DELETE /api/0/tokens/{tokenID}/", api(s.handleRevokeToken))
+	mux.Handle("POST /api/0/tokens/", mutate(s.requireAuth(http.HandlerFunc(s.handleCreateToken))))
+	mux.Handle("DELETE /api/0/tokens/{tokenID}/", mutate(s.requireAuth(http.HandlerFunc(s.handleRevokeToken))))
 }
 
 type org struct {

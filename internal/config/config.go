@@ -19,7 +19,8 @@ type Config struct {
 	SingleOrg      bool   // lock the install to the first organization
 
 	// Ingest limits
-	MaxEventBytes int64 // decompressed envelope cap
+	MaxEventBytes            int64 // decompressed envelope cap
+	IngestRateLimitPerMinute int64 // 0 = unlimited (self-host default)
 
 	// Retention (days)
 	RetentionEventDays       int
@@ -49,6 +50,7 @@ func Load() (*Config, error) {
 		WorkerEmbedded:           getEnvBool("BUGHAN_WORKER_EMBEDDED", true),
 		SingleOrg:                getEnvBool("BUGHAN_SINGLE_ORG", false),
 		MaxEventBytes:            int64(getEnvInt("BUGHAN_MAX_EVENT_MB", 20)) << 20,
+		IngestRateLimitPerMinute: int64(getEnvInt("BUGHAN_RATE_LIMIT_PER_MIN", 0)),
 		RetentionEventDays:       getEnvInt("BUGHAN_RETENTION_EVENT_DAYS", 90),
 		RetentionTransactionDays: getEnvInt("BUGHAN_RETENTION_TRANSACTION_DAYS", 30),
 		RetentionSessionDays:     getEnvInt("BUGHAN_RETENTION_SESSION_DAYS", 30),

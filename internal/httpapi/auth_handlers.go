@@ -27,7 +27,7 @@ func (s *Server) registerAuth(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/setup/", s.postSetup)
 	mux.HandleFunc("GET /auth/login/", s.pageLogin)
 	mux.HandleFunc("POST /auth/login/", s.postLogin)
-	mux.HandleFunc("POST /auth/logout/", s.postLogout)
+	mux.Handle("POST /auth/logout/", s.requireCSRF(http.HandlerFunc(s.postLogout)))
 	mux.HandleFunc("GET /auth/signup/", s.pageSignup)
 	mux.HandleFunc("POST /auth/signup/", s.postSignup)
 	mux.HandleFunc("GET /auth/forgot/", s.pageForgot)
@@ -35,7 +35,7 @@ func (s *Server) registerAuth(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/reset/{token}", s.pageReset)
 	mux.HandleFunc("POST /auth/reset/", s.postReset)
 	mux.HandleFunc("GET /accept/{token}", s.pageAcceptInvite)
-	mux.HandleFunc("POST /accept/{token}", s.postAcceptInvite)
+	mux.Handle("POST /accept/{token}", s.requireCSRF(http.HandlerFunc(s.postAcceptInvite)))
 }
 
 func (s *Server) secureCookies() bool { return !s.cfg.DevNoSecureCookies }
