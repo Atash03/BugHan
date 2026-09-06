@@ -80,7 +80,7 @@ func snippetAt(path, content string, line int) *Snippet {
 	}
 	s := &Snippet{Path: path, Line: line, LineText: lines[line-1]}
 	for i := line - 2; i >= 0 && len(s.Pre) < snippetRadius; i-- {
-		s.Pre = append([]string{lines[i]}, s.Pre...)
+		s.Pre = append(s.Pre, lines[i])
 	}
 	for i := line; i < len(lines) && len(s.Post) < snippetRadius; i++ {
 		s.Post = append(s.Post, lines[i])

@@ -10,6 +10,7 @@ import (
 type Artifact struct {
 	Name         string // uploaded artifact name (path or URL)
 	Dist         string
+	SHA256       string
 	DebugID      string
 	SourcemapURL string // raw sourceMappingURL extracted from scripts
 	Body         []byte // needed for inline data: maps; may be nil
