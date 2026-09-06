@@ -48,6 +48,9 @@ func (s *Server) Handler() http.Handler {
 	s.registerLanding(mux)
 	s.registerTenancy(mux)
 
+	// Classic release-files API (sentry-cli surface).
+	s.registerReleases(mux)
+
 	// SDK-facing ingest is registered by the ingest slice.
 	s.registerIngest(mux)
 
