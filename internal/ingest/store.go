@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/Atash03/BugHan/internal/hll"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -278,24 +280,82 @@ func (p *Processor) storeSession(ctx context.Context, tx pgx.Tx, item Item, proj
 	}
 
 	hour := started.Truncate(time.Hour)
-	_, err = tx.Exec(ctx, `
+
+	// Merge the did into the rollup row's HLL sketches (DESIGN.md §9):
+	// read-modify-write in the same tx as the additive upsert, so the written
+	// sketch is the current row's sketch plus this session. Re-deliveries of
+	// a did are idempotent register-wise maxima.
+	distinctSketch, crashedSketch, err := loadSketches(ctx, tx, projectID, s.Attrs.Release, environment, hour)
+	if err != nil {
+		return err
+	}
+	if didHash != "" {
+		distinctSketch.Insert([]byte(didHash))
+		if status == "crashed" {
+			crashedSketch.Insert([]byte(didHash))
+		}
+	}
+	distinctBlob, err := distinctSketch.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	crashedBlob, err := crashedSketch.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO session_rollups (project_id, release, environment, hour,
-			total, crashed, abnormal, errored, exited, duration_sum)
+			total, crashed, abnormal, errored, exited, duration_sum, distinct_did, crashed_did)
 		VALUES ($1,$2,$3,$4,1,
 			CASE WHEN $5 = 'crashed' THEN 1 ELSE 0 END,
 			CASE WHEN $5 = 'abnormal' THEN 1 ELSE 0 END,
 			CASE WHEN $5 = 'ok' AND $6 > 0 THEN 1 ELSE 0 END,
 			CASE WHEN $5 = 'exited' THEN 1 ELSE 0 END,
-			COALESCE($7, 0))
+			COALESCE($7, 0), $8, $9)
 		ON CONFLICT (project_id, release, environment, hour) DO UPDATE SET
 			total = session_rollups.total + 1,
 			crashed = session_rollups.crashed + CASE WHEN $5 = 'crashed' THEN 1 ELSE 0 END,
 			abnormal = session_rollups.abnormal + CASE WHEN $5 = 'abnormal' THEN 1 ELSE 0 END,
 			errored = session_rollups.errored + CASE WHEN $5 = 'ok' AND $6 > 0 THEN 1 ELSE 0 END,
 			exited = session_rollups.exited + CASE WHEN $5 = 'exited' THEN 1 ELSE 0 END,
-			duration_sum = session_rollups.duration_sum + COALESCE($7, 0)`,
-		projectID, s.Attrs.Release, environment, hour, status, s.Errors, dur)
-	return err
+			duration_sum = session_rollups.duration_sum + COALESCE($7, 0),
+			distinct_did = EXCLUDED.distinct_did,
+			crashed_did = EXCLUDED.crashed_did`,
+		projectID, s.Attrs.Release, environment, hour, status, s.Errors, dur,
+		distinctBlob, crashedBlob); err != nil {
+		return err
+	}
+	return nil
+}
+
+// loadSketches reads a rollup row's HLL sketches, returning fresh empty ones
+// when the row doesn't exist yet (or carries NULLs).
+func loadSketches(ctx context.Context, tx pgx.Tx, projectID, release, environment string, hour time.Time) (*hll.Sketch, *hll.Sketch, error) {
+	var distinctBlob, crashedBlob []byte
+	err := tx.QueryRow(ctx, `
+		SELECT distinct_did, crashed_did FROM session_rollups
+		WHERE project_id = $1 AND release = $2 AND environment = $3 AND hour = $4`,
+		projectID, release, environment, hour).Scan(&distinctBlob, &crashedBlob)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, err
+	}
+	distinct, crashed := hll.New(), hll.New()
+	for i, blob := range [][]byte{distinctBlob, crashedBlob} {
+		if len(blob) == 0 {
+			continue
+		}
+		sk, err := hll.UnmarshalBinary(blob)
+		if err != nil {
+			return nil, nil, fmt.Errorf("session_rollups sketch: %w", err)
+		}
+		if i == 0 {
+			distinct = sk
+		} else {
+			crashed = sk
+		}
+	}
+	return distinct, crashed, nil
 }
 
 // storeSessionAggregates folds pre-aggregated `sessions` items into rollups.

@@ -117,6 +117,10 @@ func runServe(log *slog.Logger) {
 			log.Error("schedule retention sweep", "err", err)
 			os.Exit(1)
 		}
+		if err := w.RegisterRollupMaintenance(); err != nil {
+			log.Error("schedule rollup maintenance", "err", err)
+			os.Exit(1)
+		}
 		go w.Start(ctx)
 		log.Info("embedded worker started")
 	}
