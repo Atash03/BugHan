@@ -48,6 +48,9 @@ func (s *Server) Handler() http.Handler {
 	s.registerLanding(mux)
 	s.registerTenancy(mux)
 
+	// Performance plane (summaries, transaction detail, traces, release health).
+	s.registerPerformance(mux)
+
 	// SDK-facing ingest is registered by the ingest slice.
 	s.registerIngest(mux)
 
