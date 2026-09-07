@@ -1,0 +1,518 @@
+{{define "app_head"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · BugHan</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="app-body">
+{{end}}
+
+{{define "app_chrome"}}
+{{$nav := .Data.nav}}
+<header class="topbar">
+  <a class="brand" href="/"><span class="brand-mark">Ⓑ</span> BugHan</a>
+  {{if $nav.org}}
+  {{$org := $nav.org}}
+  <details class="menu">
+    <summary>{{$org.Name}}</summary>
+    <div class="menu-pop">
+      {{range $nav.orgs}}<a href="/{{.Slug}}/">{{.Name}}</a>{{end}}
+      <a class="muted" href="/auth/landing/">All organizations</a>
+    </div>
+  </details>
+  {{if $nav.project}}
+  {{$proj := $nav.project}}
+  <details class="menu">
+    <summary>{{$proj.Name}}</summary>
+    <div class="menu-pop">
+      {{range $nav.projects}}<a href="/{{$org.Slug}}/{{.slug}}/issues/">{{.name}}</a>{{end}}
+      <a class="muted" href="/{{$org.Slug}}/projects/">All projects</a>
+    </div>
+  </details>
+  {{end}}
+  {{end}}
+  {{if and $nav.org $nav.project}}
+  {{$org := $nav.org}}{{$proj := $nav.project}}
+  <form class="topbar-search" method="get" action="/{{$org.Slug}}/{{$proj.Slug}}/issues/">
+    <input type="search" name="q" placeholder="Search issues…" value="{{index .Data "q"}}">
+  </form>
+  {{end}}
+  <span class="topbar-spacer"></span>
+  <details class="menu">
+    <summary>{{$nav.user_name}}</summary>
+    <div class="menu-pop menu-right">
+      <span class="muted">{{$nav.user_email}}</span>
+      <a href="/user/settings/">User settings</a>
+      <form method="post" action="/auth/logout/" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+        <button class="btn btn-ghost" type="submit">Log out</button>
+      </form>
+    </div>
+  </details>
+</header>
+<div class="app-layout">
+<aside class="sidebar">
+  {{if $nav.org}}{{$org := $nav.org}}
+    {{if $nav.project}}{{$proj := $nav.project}}
+    <a class="{{if eq $nav.section "issues"}}active{{end}}" href="/{{$org.Slug}}/{{$proj.Slug}}/issues/">Issues</a>
+    <span class="disabled" title="Lands with T9">Performance <em>T9</em></span>
+    <span class="disabled" title="Lands with T9">Releases <em>T9</em></span>
+    <a class="{{if eq $nav.section "projects"}}active{{end}}" href="/{{$org.Slug}}/projects/">Projects</a>
+    <a class="{{if eq $nav.section "settings"}}active{{end}}" href="/{{$org.Slug}}/{{$proj.Slug}}/settings/">Settings</a>
+    {{else}}
+    <a class="{{if eq $nav.section "dashboard"}}active{{end}}" href="/{{$org.Slug}}/">Dashboard</a>
+    <a class="{{if eq $nav.section "projects"}}active{{end}}" href="/{{$org.Slug}}/projects/">Projects</a>
+    <a class="{{if eq $nav.section "settings"}}active{{end}}" href="/{{$org.Slug}}/settings/">Settings</a>
+    {{end}}
+  {{else}}
+    <a class="{{if eq $nav.section "user"}}active{{end}}" href="/user/settings/">User settings</a>
+  {{end}}
+</aside>
+<main class="app-main">
+{{end}}
+
+{{define "app_foot"}}
+</main>
+</div>
+</body>
+</html>
+{{end}}
+
+{{define "app_error"}}
+{{template "app_head" .}}
+{{$nav := .Data.nav}}
+<header class="topbar"><a class="brand" href="/"><span class="brand-mark">Ⓑ</span> BugHan</a></header>
+<main class="container">
+  <h2>{{.Data.code}} · {{.Title}}</h2>
+  <p>{{.Data.message}}</p>
+  <p><a href="javascript:history.back()">← Go back</a></p>
+</main>
+</body>
+</html>
+{{end}}
+
+{{define "app_dashboard"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$org := .Data.org}}
+<h2>{{.Title}} <span class="muted">/{{$org.Slug}}</span></h2>
+<section class="stat-strip">
+  <div class="stat"><span class="stat-num">{{.Data.unresolved}}</span><span class="stat-label">Unresolved issues</span></div>
+  <div class="stat"><span class="stat-num">{{.Data.events24h}}</span><span class="stat-label">Events (24h)</span></div>
+  <div class="stat"><span class="stat-num">{{.Data.projects}}</span><span class="stat-label">Projects</span></div>
+</section>
+<h3>Events · last 24 hours</h3>
+{{if .Data.chart}}
+<div class="chart">
+  {{range .Data.chart}}<div class="bar" style="height:{{pct .Count $.Data.chart_max}}%" title="{{.Hour}} — {{.Count}}"></div>{{end}}
+</div>
+{{else}}
+<p class="muted">No events in the last 24 hours. <a href="/{{$org.Slug}}/projects/">Open a project to get its DSN.</a></p>
+{{end}}
+<h3>Latest issues</h3>
+{{if .Data.latest}}
+<table class="tbl">
+  <thead><tr><th>Issue</th><th>Project</th><th>Events</th><th>Last seen</th></tr></thead>
+  <tbody>
+  {{range .Data.latest}}
+    <tr>
+      <td><a href="/{{$org.Slug}}/{{.ProjectSlug}}/issues/{{.ID}}/">{{.Title}}</a><br><span class="muted">{{.Culprit}}</span></td>
+      <td><a href="/{{$org.Slug}}/{{.ProjectSlug}}/issues/">{{.ProjectName}}</a></td>
+      <td>{{.Count}}</td>
+      <td class="muted">{{.LastSeen}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No issues yet — wire up an SDK and errors will land here.</p>
+{{end}}
+<h3>Recent releases</h3>
+{{if .Data.releases}}
+<ul class="plain-list">
+  {{range .Data.releases}}<li><strong>{{.Project}} · {{.Version}}</strong> <span class="muted">last event {{.LastEvent}}</span></li>{{end}}
+</ul>
+{{else}}
+<p class="muted">No releases seen yet.</p>
+{{end}}
+<p><a class="btn btn-secondary" href="/{{$org.Slug}}/projects/">View projects</a></p>
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_projects"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$nav := .Data.nav}}{{$org := .Data.org}}
+<h2>Projects</h2>
+<div class="cards">
+{{range .Data.projects}}
+  <div class="card">
+    <h3><a href="/{{$org.Slug}}/{{.Slug}}/issues/">{{.Name}}</a></h3>
+    <p class="muted">{{.Platform}} · {{.Issues}} unresolved · {{.Events24h}} events (24h)</p>
+    {{if .DSN}}<code class="dsn">{{.DSN}}</code>{{end}}
+    <p class="card-links">
+      <a href="/{{$org.Slug}}/{{.Slug}}/issues/">Issues</a> ·
+      <a href="/{{$org.Slug}}/{{.Slug}}/onboarding/">Onboarding</a> ·
+      <a href="/{{$org.Slug}}/{{.Slug}}/settings/">Settings</a>
+    </p>
+  </div>
+{{else}}
+  <p class="muted">No projects yet.</p>
+{{end}}
+</div>
+{{if .Data.can_admin}}
+<h3>New project</h3>
+<form method="post" action="/{{$org.Slug}}/projects/new/" class="stacked-form narrow">
+  <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+  <label>Name <input type="text" name="name" required placeholder="Web App"></label>
+  <label>Platform <input type="text" name="platform" value="javascript"></label>
+  <button type="submit">Create project</button>
+</form>
+{{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_onboarding"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$org := .Data.org}}{{$proj := .Data.project}}
+<h2>{{$proj.Name}} · Onboarding</h2>
+<ol class="steps">
+  <li><strong>Install the SDK</strong><pre><code>npm install @sentry/browser</code></pre></li>
+  <li><strong>Initialize with this DSN</strong><pre><code>import * as Sentry from "@sentry/browser";
+
+Sentry.init({
+  dsn: "{{.Data.dsn}}",
+  tracesSampleRate: 1.0,
+});</code></pre></li>
+  <li><strong>Capture a test error</strong><pre><code>Sentry.captureException(new Error("Hello from BugHan"));</code></pre></li>
+  <li><strong>Verify</strong> — the issue should appear in <a href="/{{$org.Slug}}/{{$proj.Slug}}/issues/">Issues</a> within seconds.</li>
+</ol>
+<p class="muted">Platform: {{$proj.Platform}}. This DSN accepts sentry-js v8–v10 envelopes; unknown item types are tolerated, never rejected.</p>
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_issues"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$nav := .Data.nav}}{{$org := .Data.org}}{{$proj := .Data.project}}
+<h2>Issues</h2>
+<form method="get" action="/{{$org.Slug}}/{{$proj.Slug}}/issues/" class="filter-row">
+  <select name="status">
+    <option value="unresolved" {{if eq .Data.status "unresolved"}}selected{{end}}>Unresolved</option>
+    <option value="resolved" {{if eq .Data.status "resolved"}}selected{{end}}>Resolved</option>
+    <option value="ignored" {{if eq .Data.status "ignored"}}selected{{end}}>Ignored</option>
+    <option value="all" {{if eq .Data.status "all"}}selected{{end}}>All</option>
+  </select>
+  <select name="environment">
+    <option value="">All environments</option>
+    {{range .Data.envs}}<option value="{{.}}" {{if eq $.Data.environment .}}selected{{end}}>{{.}}</option>{{end}}
+  </select>
+  <select name="sort">
+    <option value="last_seen" {{if eq .Data.sort "last_seen"}}selected{{end}}>Last seen</option>
+    <option value="first_seen" {{if eq .Data.sort "first_seen"}}selected{{end}}>First seen</option>
+    <option value="count" {{if eq .Data.sort "count"}}selected{{end}}>Event count</option>
+    <option value="user_count" {{if eq .Data.sort "user_count"}}selected{{end}}>Users</option>
+  </select>
+  <input type="search" name="q" placeholder="Search title or culprit…" value="{{.Data.q}}">
+  <button type="submit">Filter</button>
+</form>
+{{if .Data.views}}
+<p class="views">Saved views:
+  {{range .Data.views}}<a class="chip" href="./?{{.query}}">{{.name}}</a> {{end}}
+</p>
+{{end}}
+{{if .Data.issues}}
+<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/issues/bulk/">
+<input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+<table class="tbl">
+  <thead><tr><th></th><th>Issue</th><th>Events</th><th>Users</th><th>Trend 24h</th><th>Assignee</th><th>Last seen</th></tr></thead>
+  <tbody>
+  {{range .Data.issues}}
+  {{$spark := .Spark}}{{$smax := .SparkMax}}
+    <tr>
+      <td><input type="checkbox" name="ids" value="{{.ID}}"></td>
+      <td>
+        <a href="/{{$org.Slug}}/{{$proj.Slug}}/issues/{{.ID}}/">{{.Title}}</a>
+        {{if eq .Substatus "regressed"}}<span class="badge badge-warn">regressed</span>{{end}}
+        {{if eq .Status "resolved"}}<span class="badge badge-ok">resolved</span>{{end}}
+        {{if eq .Status "ignored"}}<span class="badge">ignored</span>{{end}}
+        <span class="badge badge-level">{{.Level}}</span><br>
+        <span class="muted">{{.Culprit}}</span>
+      </td>
+      <td>{{.Count}}</td>
+      <td>{{.UserCount}}</td>
+      <td><div class="spark">{{range $spark}}<i style="height:{{pct . $smax}}%"></i>{{end}}</div></td>
+      <td class="muted">{{.AssigneeName}}</td>
+      <td class="muted">{{.LastSeen}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+<p class="bulk-row">
+  <select name="action">
+    <option value="resolved">Resolve</option>
+    <option value="ignored">Ignore</option>
+    <option value="unresolved">Reopen</option>
+  </select>
+  <button type="submit">Apply to selected</button>
+</p>
+</form>
+{{else}}
+<p class="muted">No {{.Data.status}} issues{{if .Data.q}} matching “{{.Data.q}}”{{end}}. {{if eq .Data.status "unresolved"}}Nice and quiet.{{end}}</p>
+{{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_issue"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$nav := .Data.nav}}{{$org := .Data.org}}{{$proj := .Data.project}}{{$issue := .Data.issue}}
+<p class="crumbs"><a href="/{{$org.Slug}}/{{$proj.Slug}}/issues/">Issues</a> / {{$issue.ID}}</p>
+<h2>{{$issue.Title}}</h2>
+<p class="muted">{{$issue.Culprit}}</p>
+<p>
+  <span class="badge badge-level">{{$issue.Level}}</span>
+  <span class="badge">{{$issue.Status}}{{if $issue.Substatus}} · {{$issue.Substatus}}{{end}}</span>
+  <span class="muted">{{$issue.Count}} events · {{$issue.UserCount}} users · first {{$issue.FirstSeen}} · last {{$issue.LastSeen}}</span>
+</p>
+<section class="triage">
+  <form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/issues/{{$issue.ID}}/triage/" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+    <button name="status" value="resolved" type="submit">Resolve</button>
+    <button name="status" value="ignored" type="submit" class="btn-secondary">Ignore</button>
+    <button name="status" value="unresolved" type="submit" class="btn-ghost">Reopen</button>
+  </form>
+  <form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/issues/{{$issue.ID}}/triage/" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+    <select name="assignedTo">
+      <option value="unassign">Unassigned</option>
+      <option value="me">Assign to me</option>
+      {{range .Data.members}}<option value="{{.email}}" {{if eq $.Data.issue.AssigneeName .name}}selected{{end}}>{{.name}} ({{.email}})</option>{{end}}
+    </select>
+    <button type="submit" class="btn-secondary">Assign</button>
+  </form>
+  {{if .Data.trace_id}}<p>trace_id <code>{{.Data.trace_id}}</code>{{if .Data.span_id}} · span <code>{{.Data.span_id}}</code>{{end}} <span class="muted">(waterfall lands with T9)</span></p>{{end}}
+</section>
+
+<h3>Stack trace</h3>
+{{if and .Data.symbolicated .Data.symbolicated.Symbolicated}}
+  {{range .Data.symbolicated.Exceptions}}
+  <h4>{{.Type}}: {{.Value}}</h4>
+  {{range .Frames}}
+  <div class="frame">
+    <div class="frame-head"><code>{{if .Function}}{{.Function}}{{else}}anonymous{{end}}</code> <span class="muted">{{.AbsPath}}:{{.Lineno}}:{{.Colno}}</span> {{if .InApp}}<span class="badge">in-app</span>{{end}} {{if .Resolved}}<span class="badge badge-ok">symbolicated</span>{{end}}</div>
+    {{if .Resolved}}
+    <div class="frame-src"><code>{{.Source}}:{{.SrcLine}}:{{.SrcCol}}</code></div>
+    {{if .Context}}
+    <pre class="snippet">{{range .Context.Pre}}{{.}}
+{{end}}<strong>{{.Context.LineText}}</strong>
+{{range .Context.Post}}{{.}}
+{{end}}</pre>
+    {{end}}
+    {{end}}
+  </div>
+  {{end}}
+  {{end}}
+  {{if .Data.symbolicated.MissingMaps}}
+  <div class="alert alert-notice">No source map found for:
+    <ul>{{range .Data.symbolicated.MissingMaps}}<li><code>{{.AbsPath}}</code> <span class="muted">({{.Reason}})</span></li>{{end}}</ul>
+    Upload maps for this release to symbolicate these frames.
+  </div>
+  {{end}}
+{{else if .Data.exceptions}}
+  {{range .Data.exceptions}}
+  <h4>{{index . "type"}}: {{index . "value"}}</h4>
+  {{$st := index . "stacktrace"}}
+  {{if $st}}
+  {{range (index $st "frames")}}
+  <div class="frame">
+    <div class="frame-head"><code>{{index . "function"}}</code> <span class="muted">{{index . "filename"}}:{{index . "lineno"}}</span> {{if index . "in_app"}}<span class="badge">in-app</span>{{end}}</div>
+    {{if index . "context_line"}}<pre class="snippet">{{index . "context_line"}}</pre>{{end}}
+  </div>
+  {{end}}
+  {{end}}
+  {{end}}
+{{else}}
+  <p class="muted">No stack trace on this event.</p>
+{{end}}
+
+<h3>Event <code>{{.Data.event.id}}</code></h3>
+<p class="muted">{{.Data.event.timestamp}} · {{.Data.env}} · {{.Data.release}}{{if .Data.dist}} ({{.Data.dist}}){{end}} · {{.Data.level}}</p>
+{{if .Data.tags}}
+<h4>Tags</h4>
+<table class="tbl narrow"><tbody>
+{{range $k, $v := .Data.tags}}<tr><td><code>{{$k}}</code></td><td>{{$v}}</td></tr>{{end}}
+</tbody></table>
+{{end}}
+{{if .Data.breadcrumbs}}
+<h4>Breadcrumbs</h4>
+<table class="tbl"><thead><tr><th>Time</th><th>Category</th><th>Message</th><th>Level</th></tr></thead><tbody>
+{{range .Data.breadcrumbs.values}}<tr><td class="muted">{{index . "timestamp"}}</td><td><code>{{index . "category"}}</code></td><td>{{index . "message"}}</td><td>{{index . "level"}}</td></tr>{{end}}
+</tbody></table>
+{{end}}
+{{if .Data.events}}
+<h4>Recent events</h4>
+<ul class="plain-list">
+{{range .Data.events}}<li><a href="?event={{.ID}}"><code>{{.ID}}</code></a> <span class="muted">{{.TS}} — {{.Title}}</span></li>{{end}}
+</ul>
+{{end}}
+
+{{if .Data.feedbacks}}
+<h3>User feedback</h3>
+{{range .Data.feedbacks}}
+<div class="feedback"><p>{{.Message}}</p><p class="muted">{{.Name}} · {{.Email}} · {{.TS}}</p></div>
+{{end}}
+{{end}}
+
+<h3>Activity</h3>
+<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/issues/{{$issue.ID}}/comment/" class="stacked-form narrow">
+  <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+  <label>Comment <input type="text" name="body" required placeholder="What did you find?"></label>
+  <button type="submit" class="btn-secondary">Add comment</button>
+</form>
+<ul class="plain-list">
+{{range .Data.feed}}
+  <li><span class="badge">{{.type}}</span> {{.body}} <span class="muted">— {{.author}} · {{.created}}</span></li>
+{{else}}
+  <li class="muted">No activity yet.</li>
+{{end}}
+</ul>
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_org_settings"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$nav := .Data.nav}}{{$org := .Data.org}}
+<h2>{{$org.Name}} · Organization settings</h2>
+<h3>Members</h3>
+<table class="tbl">
+<thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Joined</th>{{if .Data.can_admin}}<th></th>{{end}}</tr></thead>
+<tbody>
+{{range .Data.members}}
+<tr><td>{{.Name}}</td><td>{{.Email}}</td><td>{{.Role}}</td><td class="muted">{{.Joined}}</td>
+{{if $.Data.can_admin}}<td>
+  <form method="post" action="/{{$org.Slug}}/settings/members/{{.ID}}" class="inline-form" onsubmit="return confirm('Remove {{.Email}}?')">
+    <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+    <button type="submit" class="btn-danger btn-sm">Remove</button>
+  </form>
+</td>{{end}}</tr>
+{{end}}
+</tbody>
+</table>
+{{if .Data.can_admin}}
+<h3>Invite a member</h3>
+<form method="post" action="/{{$org.Slug}}/settings/invite/" class="stacked-form narrow">
+  <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+  <label>Email <input type="email" name="email" required></label>
+  <label>Role <select name="role"><option value="member">member</option><option value="admin">admin</option></select></label>
+  <button type="submit">Send invite</button>
+</form>
+<p class="muted">Invite links expire in 7 days and are emailed when SMTP is configured; otherwise use the API response's invite_link.</p>
+<h3>Pending invites</h3>
+{{if .Data.invites}}
+<ul class="plain-list">
+{{range .Data.invites}}<li>{{.Email}} · {{.Role}} · expires {{.Expires}}
+  <form method="post" action="/{{$org.Slug}}/settings/invites/{{.ID}}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+    <button type="submit" class="btn-ghost btn-sm">Revoke</button>
+  </form></li>
+{{end}}
+</ul>
+{{else}}<p class="muted">No pending invites.</p>{{end}}
+{{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_project_settings"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$nav := .Data.nav}}{{$org := .Data.org}}{{$proj := .Data.project}}
+<h2>{{$proj.Name}} · Project settings</h2>
+{{if .Data.can_admin}}
+<h3>General</h3>
+<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/settings/" class="stacked-form narrow">
+  <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+  <label>Name <input type="text" name="name" value="{{$proj.Name}}"></label>
+  <label>Platform <input type="text" name="platform" value="{{$proj.Platform}}"></label>
+  <button type="submit">Save</button>
+</form>
+<h3>Ingest keys &amp; DSN</h3>
+<table class="tbl">
+<thead><tr><th>Name</th><th>DSN</th><th>Created</th><th></th></tr></thead>
+<tbody>
+{{range .Data.keys}}
+<tr><td>{{.Name}}</td><td>{{if .Active}}<code class="dsn">{{.DSN}}</code>{{else}}<span class="muted">revoked</span>{{end}}</td><td class="muted">{{.Created}}</td>
+<td>{{if .Active}}<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/settings/keys/{{.ID}}/revoke/" class="inline-form" onsubmit="return confirm('Revoke this key? SDK traffic using it will 403.')">
+<input type="hidden" name="csrf_token" value="{{$nav.csrf}}"><button type="submit" class="btn-danger btn-sm">Revoke</button></form>{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/settings/keys/new" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+  <input type="text" name="name" placeholder="Key name (optional)">
+  <button type="submit" class="btn-secondary">New key</button>
+</form>
+<h3>Danger zone</h3>
+<p><button class="btn-danger" id="wipe-btn" type="button">Delete all event data</button></p>
+<p class="muted">Wipes events, transactions, sessions, feedback, rollups, releases, and issues for this project. Keys and saved views survive. This cannot be undone.</p>
+<script>
+document.getElementById("wipe-btn").addEventListener("click", async () => {
+  if (!confirm("Delete ALL event data for this project?")) return;
+  const res = await fetch("/api/0/projects/{{$org.Slug}}/{{$proj.Slug}}/delete-data/", {
+    method: "POST",
+    headers: {"X-CSRF-Token": "{{$nav.csrf}}"},
+  });
+  alert(res.ok ? "Project event data deleted." : "Failed: " + res.status);
+  if (res.ok) location.href = "/{{$org.Slug}}/{{$proj.Slug}}/issues/";
+});
+</script>
+{{else}}
+<p class="muted">Only admins can change project settings.</p>
+<table class="tbl">
+<thead><tr><th>Name</th><th>DSN</th></tr></thead>
+<tbody>{{range .Data.keys}}<tr><td>{{.Name}}</td><td>{{if .Active}}<code class="dsn">{{.DSN}}</code>{{else}}<span class="muted">revoked</span>{{end}}</td></tr>{{end}}</tbody>
+</table>
+{{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_user_settings"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$nav := .Data.nav}}
+<h2>User settings</h2>
+<h3>Profile</h3>
+<form method="post" action="/user/settings/" class="stacked-form narrow">
+  <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+  <label>Email <input type="email" value="{{.Data.user.email}}" disabled></label>
+  <label>Name <input type="text" name="name" value="{{.Data.user.name}}"></label>
+  <button type="submit">Save</button>
+</form>
+<h3>API tokens</h3>
+{{if .Data.new_token}}
+<div class="alert alert-notice">New token (shown once — copy it now):<br><code>{{.Data.new_token}}</code></div>
+{{end}}
+<table class="tbl">
+<thead><tr><th>Name</th><th>Prefix</th><th>Scope</th><th>Created</th><th></th></tr></thead>
+<tbody>
+{{range .Data.tokens}}
+<tr><td>{{.Name}}</td><td><code>{{.Prefix}}…</code></td><td>{{.Scope}}</td><td class="muted">{{.Created}}</td>
+<td>{{if .Active}}<form method="post" action="/user/settings/tokens/{{.ID}}/revoke/" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{$nav.csrf}}"><button type="submit" class="btn-danger btn-sm">Revoke</button></form>{{else}}<span class="muted">revoked</span>{{end}}</td></tr>
+{{else}}<tr><td colspan="5" class="muted">No tokens yet.</td></tr>
+{{end}}
+</tbody>
+</table>
+<form method="post" action="/user/settings/tokens/new" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+  <input type="text" name="name" placeholder="Token name">
+  <select name="scope"><option value="write">write</option><option value="read">read</option></select>
+  <button type="submit" class="btn-secondary">New token</button>
+</form>
+<p class="muted">Tokens authenticate the REST API as you; their reach is the union of your memberships.</p>
+{{template "app_foot" .}}
+{{end}}

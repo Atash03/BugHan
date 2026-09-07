@@ -26,7 +26,7 @@
 {{end}}
 <ul class="org-list">
 {{range .Data.orgs}}
-  <li><strong>{{.Name}}</strong> <span class="muted">/{{.Slug}} · {{.Role}}</span></li>
+  <li><a href="/{{.Slug}}/"><strong>{{.Name}}</strong></a> <span class="muted">/{{.Slug}} · {{.Role}}</span></li>
 {{end}}
 </ul>
 <h3>Create an organization</h3>
