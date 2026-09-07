@@ -4,6 +4,7 @@ package httpapi
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/Atash03/BugHan/internal/auth"
 	"github.com/Atash03/BugHan/internal/config"
@@ -60,7 +61,31 @@ func (s *Server) Handler() http.Handler {
 	// Issues API: list, triage, activity, saved views, data wipe (T5).
 	s.registerIssues(mux)
 
-	return s.loadPrincipal(s.logRequests(mux))
+	// User settings pages (literal prefix: safe on the main mux).
+	s.registerUserSettings(mux)
+
+	// Server-rendered web UI (T8) lives on its own mux: leading-wildcard
+	// /{org}/... patterns overlap the /static/ and /auth/ subtrees above,
+	// which Go's ServeMux rejects at registration. uiOrAPI dispatches by
+	// first path segment instead.
+	ui := http.NewServeMux()
+	s.registerWebUI(ui)
+
+	return s.loadPrincipal(s.logRequests(uiOrAPI(ui, mux)))
+}
+
+// uiOrAPI sends extension-style app URLs (/{org}/..., /user/settings/) to
+// the UI mux; ingest, REST, auth pages, and static assets stay on the main
+// mux. See reservedTopSegments for the owned top-level segments.
+func uiOrAPI(ui, api http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		first, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+		if !reservedTopSegments(first) {
+			ui.ServeHTTP(w, r)
+			return
+		}
+		api.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
