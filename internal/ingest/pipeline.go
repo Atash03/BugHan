@@ -29,6 +29,19 @@ type ProcessResult struct {
 	Ignored    int // known types we deliberately don't store (client_report, attachment…)
 	Unknown    int // unknown item types (counted per spec)
 	Duplicates int // event_id dedupe hits
+	Signals    []AlertSignal
+}
+
+// AlertSignal describes one stored error event for post-commit alert
+// evaluation (worker drains it via the jobs table; see DESIGN.md §12).
+type AlertSignal struct {
+	IssueID      string
+	EventID      string
+	IsNew        bool // issue row was created by this event
+	IsRegression bool // issue flipped resolved → regressed on this event
+	Environment  string
+	Release      string
+	Level        string
 }
 
 // Process persists each supported item inside one transaction.
@@ -43,7 +56,7 @@ func (p *Processor) Process(ctx context.Context, env *Envelope, projectID string
 	for _, item := range env.Items {
 		switch item.Header.Type {
 		case "event":
-			dup, err := p.storeEvent(ctx, tx, env, item, projectID)
+			dup, sig, err := p.storeEvent(ctx, tx, env, item, projectID)
 			if err != nil {
 				return res, fmt.Errorf("event item: %w", err)
 			}
@@ -51,6 +64,9 @@ func (p *Processor) Process(ctx context.Context, env *Envelope, projectID string
 				res.Duplicates++
 			} else {
 				res.Accepted++
+				if sig != nil {
+					res.Signals = append(res.Signals, *sig)
+				}
 			}
 		case "transaction":
 			dup, err := p.storeTransaction(ctx, tx, env, item, projectID)

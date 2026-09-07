@@ -61,6 +61,9 @@ func (s *Server) Handler() http.Handler {
 	// Issues API: list, triage, activity, saved views, data wipe (T5).
 	s.registerIssues(mux)
 
+	// Thin alerting: rule CRUD, send-test, delivery log (T10).
+	s.registerAlerts(mux)
+
 	// User settings pages (literal prefix: safe on the main mux).
 	s.registerUserSettings(mux)
 

@@ -6,6 +6,7 @@ import (
 	"embed"
 	"html/template"
 	"net/http"
+	"strings"
 )
 
 //go:embed templates/*.html
@@ -31,16 +32,18 @@ type PageData struct {
 
 var tmpl = template.Must(template.New("bughan").Funcs(template.FuncMap{
 	// pct renders v/max as a 0–100 int for inline bar heights.
-	"pct": func(v, max int64) int {
-		if max <= 0 {
-			return 0
-		}
-		p := int(v * 100 / max)
-		if v > 0 && p < 3 {
-			p = 3
-		}
-		return p
-	},
+		"pct": func(v, max int64) int {
+			if max <= 0 {
+				return 0
+			}
+			p := int(v * 100 / max)
+			if v > 0 && p < 3 {
+				p = 3
+			}
+			return p
+		},
+		// join renders string slices (alert scopes, email lists).
+		"join": strings.Join,
 }).ParseFS(templatesFS, "templates/*.html"))
 
 // Render writes a page.

@@ -18,6 +18,7 @@ import (
 	"github.com/Atash03/BugHan/internal/config"
 	"github.com/Atash03/BugHan/internal/db"
 	"github.com/Atash03/BugHan/internal/httpapi"
+	"github.com/Atash03/BugHan/internal/mail"
 	"github.com/Atash03/BugHan/internal/worker"
 	"golang.org/x/term"
 )
@@ -121,6 +122,9 @@ func runServe(log *slog.Logger) {
 			log.Error("schedule rollup maintenance", "err", err)
 			os.Exit(1)
 		}
+		w.RegisterAlerts(worker.AlertsDeps{
+			Cfg: cfg, Mailer: mail.New(cfg, log), Log: log,
+		})
 		go w.Start(ctx)
 		log.Info("embedded worker started")
 	}
