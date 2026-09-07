@@ -502,6 +502,10 @@ func (s *Server) handleDeleteProjectData(w http.ResponseWriter, r *http.Request)
 
 	stmts := []string{
 		// Children of issues first (FKs), then the issues themselves.
+		// Alert rules survive (project settings); deliveries and dedupe
+		// rows reference dead issues, so they go with the wipe.
+		`DELETE FROM alert_dedupe WHERE issue_id IN (SELECT id FROM issues WHERE project_id = $1)`,
+		`DELETE FROM alert_deliveries WHERE project_id = $1`,
 		`DELETE FROM event_rollups WHERE issue_id IN (SELECT id FROM issues WHERE project_id = $1)`,
 		`DELETE FROM issue_user_hashes WHERE issue_id IN (SELECT id FROM issues WHERE project_id = $1)`,
 		`DELETE FROM issue_activity WHERE issue_id IN (SELECT id FROM issues WHERE project_id = $1)`,

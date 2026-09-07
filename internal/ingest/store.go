@@ -16,21 +16,23 @@ import (
 )
 
 // storeEvent persists one error event; returns true when it was a duplicate.
-func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, item Item, projectID string) (bool, error) {
+// On a fresh insert it also returns the alert signal for post-commit
+// evaluation (nil on duplicates).
+func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, item Item, projectID string) (bool, *AlertSignal, error) {
 	var payload eventPayload
 	if err := json.Unmarshal(item.Payload, &payload); err != nil {
-		return false, fmt.Errorf("payload: %w", err)
+		return false, nil, fmt.Errorf("payload: %w", err)
 	}
 	id, err := eventIDFrom(env, payload)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	ts := time.Now().UTC()
 	if len(payload.Timestamp) > 0 {
 		if t, err := parseTimestamp(payload.Timestamp); err == nil {
 			ts = t
 		} else {
-			return false, err
+			return false, nil, err
 		}
 	}
 	if payload.Platform == "" {
@@ -57,7 +59,7 @@ func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, it
 
 	norm, err := normalizeEvent(item.Payload)
 	if err != nil {
-		return false, fmt.Errorf("normalize: %w", err)
+		return false, nil, fmt.Errorf("normalize: %w", err)
 	}
 
 	ct, err := tx.Exec(ctx, `
@@ -70,41 +72,55 @@ func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, it
 		norm.Title, norm.Culprit, payload.Message, traceID, payload.Contexts.Trace.SpanID,
 		affectedUserHash, tagsJSON, payloadJSON)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if ct.RowsAffected() == 0 {
-		return true, nil // dedupe: PK conflict → 200 no-op, no counters
+		return true, nil, nil // dedupe: PK conflict → 200 no-op, no counters
 	}
 
-	issueID, err := p.upsertIssue(ctx, tx, projectID, norm, level, affectedUserHash, ts)
+	issueID, isNew, isRegression, err := p.upsertIssue(ctx, tx, projectID, norm, level, affectedUserHash, ts)
 	if err != nil {
-		return false, fmt.Errorf("issue upsert: %w", err)
+		return false, nil, fmt.Errorf("issue upsert: %w", err)
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE events_part SET issue_id = $2 WHERE id = $1 AND timestamp = $3`,
 		id, issueID, ts); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO event_rollups (issue_id, hour, count) VALUES ($1, $2, 1)
 		ON CONFLICT (issue_id, hour) DO UPDATE SET count = event_rollups.count + 1`,
 		issueID, ts.Truncate(time.Hour)); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if err := touchRelease(ctx, tx, projectID, payload.Release, ts); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	_, _ = tx.Exec(ctx, `
 		INSERT INTO project_event_rollups (project_id, hour, count) VALUES ($1, $2, 1)
 		ON CONFLICT (project_id, hour) DO UPDATE SET count = project_event_rollups.count + 1`,
 		projectID, ts.Truncate(time.Hour))
-	return false, nil
+	return false, &AlertSignal{
+		IssueID: issueID, EventID: id.String(),
+		IsNew: isNew, IsRegression: isRegression,
+		Environment: environment, Release: payload.Release, Level: level,
+	}, nil
 }
 
 // upsertIssue creates or folds the event into its issue: counters (count,
 // distinct user_count), first/last seen, latest level, and the
 // resolved→regressed transition (ignored issues absorb silently).
-func (p *Processor) upsertIssue(ctx context.Context, tx pgx.Tx, projectID string, norm normalizedEvent, level, userHashVal string, ts time.Time) (string, error) {
+// Returns the issue id plus whether this event created the issue or
+// regressed it (for alert evaluation).
+func (p *Processor) upsertIssue(ctx context.Context, tx pgx.Tx, projectID string, norm normalizedEvent, level, userHashVal string, ts time.Time) (string, bool, bool, error) {
+	// Pre-read previous status: nil row → this event creates the issue.
+	var prevStatus string
+	_ = tx.QueryRow(ctx,
+		`SELECT status FROM issues WHERE project_id = $1 AND fingerprint = $2`,
+		projectID, norm.Fingerprint).Scan(&prevStatus)
+	isNew := prevStatus == ""
+	wasResolved := prevStatus == "resolved"
+
 	var issueID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO issues (id, project_id, fingerprint, grouping_version,
@@ -121,7 +137,7 @@ func (p *Processor) upsertIssue(ctx context.Context, tx pgx.Tx, projectID string
 		RETURNING id`,
 		projectID, norm.Fingerprint, groupingVersion, norm.Title, norm.Culprit,
 		level, ts).Scan(&issueID); err != nil {
-		return "", err
+		return "", false, false, err
 	}
 	if userHashVal != "" {
 		// user_count tracks distinct affected users: bump only when the hash
@@ -132,17 +148,17 @@ func (p *Processor) upsertIssue(ctx context.Context, tx pgx.Tx, projectID string
 			VALUES ($1, $2) ON CONFLICT (issue_id, user_hash) DO NOTHING`,
 			issueID, userHashVal)
 		if err != nil {
-			return "", err
+			return "", false, false, err
 		}
 		if ct.RowsAffected() > 0 {
 			if _, err := tx.Exec(ctx,
 				`UPDATE issues SET user_count = user_count + 1 WHERE id = $1`,
 				issueID); err != nil {
-				return "", err
+				return "", false, false, err
 			}
 		}
 	}
-	return issueID, nil
+	return issueID, isNew, wasResolved, nil
 }
 
 // storeTransaction persists one transaction (spans stay in the payload).

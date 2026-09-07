@@ -178,6 +178,92 @@ POST /api/0/projects/{orgSlug}/{projectSlug}/delete-data/   → 204
 ```
 
 **Admin only. Irreversible.** Permanently deletes the project's issues,
-events, transactions, sessions, feedback, rollups, and releases — a fresh
-start. (The daily retention sweep, by contrast, drops old events but lets
-issues survive.) Ingest keys and saved views are kept.
+events, transactions, sessions, feedback, rollups, releases, alert
+deliveries, and alert dedupe rows — a fresh start. (The daily retention
+sweep, by contrast, drops old events but lets issues survive.) Ingest keys,
+saved views, and alert rules are kept (rules are settings, not event data).
+
+## Alert rules
+
+Thin alerting (DESIGN.md §12): project-scoped rules fire on `new_issue`,
+`regression`, or `event_count` (≥N events on one issue within M minutes),
+optionally scoped by environment / release / level. Each (rule, issue) pair
+then stays quiet for the rule's `quiet_minutes` (default 30; 0 disables).
+Actions are an email list and/or one generic webhook, delivered immediately
+by the embedded worker (evaluation is enqueued at ingest; delivery attempts
+ride on the jobs table's 3-attempt retries).
+
+Reads need `member`; mutations need `admin`. Read-scope API tokens get 403
+on mutations. The webhook secret is never serialized — rotate it with
+`rotate_secret` (a secret is minted automatically when a webhook URL is
+first set).
+
+```
+GET    /api/0/projects/{orgSlug}/{projectSlug}/alerts/
+POST   /api/0/projects/{orgSlug}/{projectSlug}/alerts/
+GET    /api/0/projects/{orgSlug}/{projectSlug}/alerts/{ruleID}/
+PUT    /api/0/projects/{orgSlug}/{projectSlug}/alerts/{ruleID}/
+DELETE /api/0/projects/{orgSlug}/{projectSlug}/alerts/{ruleID}/   → 204
+```
+
+Rule JSON:
+
+```json
+{
+  "id": "…", "project_id": "…", "name": "Page the dev",
+  "trigger": "new_issue", "enabled": true,
+  "environments": ["production"], "releases": [], "levels": ["error"],
+  "threshold_count": 10, "threshold_minutes": 60, "quiet_minutes": 30,
+  "email_to": ["dev@example.com"], "webhook_url": "https://hooks.example.com/bughan"
+}
+```
+
+`trigger` ∈ `new_issue` `regression` `event_count`. A rule needs at least
+one action (`email_to` or `webhook_url`); `webhook_url` must be http(s).
+
+```
+POST /api/0/projects/{orgSlug}/{projectSlug}/alerts/{ruleID}/test/
+```
+
+Fires the rule's actions immediately with a `alert-test` payload (the
+project's latest issue/event, or synthetic placeholders when empty) and
+records the attempts with `action: "test"`. Answers
+`{ "sent": 2, "failed": 0 }`.
+
+## Alert deliveries
+
+```
+GET /api/0/projects/{orgSlug}/{projectSlug}/alerts-deliveries/?rule_id=…&issue_id=…&limit=25&offset=0
+```
+
+The delivery log, newest first (`member`). One row per attempted action:
+
+```json
+{ "data": [
+  { "id": "7", "rule_id": "…", "rule_name": "Page the dev",
+    "issue_id": "…", "event_id": "…", "trigger": "new_issue",
+    "action": "webhook", "target": "https://hooks.example.com/bughan",
+    "status": "sent", "error": "", "created_at": "…" } ],
+  "meta": { "total": 1, "limit": 25, "offset": 0 } }
+```
+
+`action` ∈ `email` `webhook` `test`; `status` ∈ `sent` `failed`.
+
+### Webhook contract
+
+`POST <webhook_url>` with a 5-second timeout, `Content-Type: application/json`,
+`X-BugHan-Event: alert` (or `alert-test`), and — when the rule carries a
+secret — `X-BugHan-Signature: sha256=<HMAC-SHA256(body, secret)>`.
+Non-2xx counts as failed (and is retried with the job). Versioned body:
+
+```json
+{ "version": 1, "event": "alert", "trigger": "new_issue",
+  "rule": { "id": "…", "name": "Page the dev", "trigger": "new_issue" },
+  "project": { "id": "…", "name": "Web App", "slug": "web-app",
+               "organization": "acme" },
+  "issue": { "id": "…", "title": "TypeError: boom", "culprit": "app.js",
+             "level": "error", "status": "unresolved", "count": 3,
+             "event_id": "…", "environment": "production", "release": "1.0" },
+  "urls": { "issue": "https://bugs.example.com/acme/web-app/issues/…/",
+            "event": "https://bugs.example.com/acme/web-app/issues/…/?event=…" } }
+```

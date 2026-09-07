@@ -457,6 +457,64 @@ Sentry.init({
   <input type="text" name="name" placeholder="Key name (optional)">
   <button type="submit" class="btn-secondary">New key</button>
 </form>
+<h3>Alert rules</h3>
+{{if .Data.alert_rules}}
+<table class="tbl">
+<thead><tr><th>Name</th><th>Trigger</th><th>Scope</th><th>Actions</th><th>Status</th><th></th></tr></thead>
+<tbody>
+{{range .Data.alert_rules}}
+<tr><td>{{.Name}}</td><td><code>{{.Trigger}}</code>{{if eq .Trigger "event_count"}} ≥{{.ThresholdCount}}/{{.ThresholdMinutes}}m{{end}}</td>
+<td class="muted">{{if .Environments}}env: {{join .Environments ", "}} {{end}}{{if .Releases}}rel: {{join .Releases ", "}} {{end}}{{if .Levels}}lvl: {{join .Levels ", "}}{{end}}{{if and (not .Environments) (not .Releases) (not .Levels)}}all{{end}} · quiet {{.QuietMinutes}}m</td>
+<td>{{range .EmailTo}}<span class="chip">{{.}}</span> {{end}}{{if .WebhookURL}}<span class="chip">webhook{{if .HasSecret}} (signed){{end}}</span>{{end}}</td>
+<td>{{if .Enabled}}<span class="badge badge-ok">on</span>{{else}}<span class="muted">off</span>{{end}}</td>
+<td>{{if $.Data.can_admin}}
+<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/settings/alerts/{{.ID}}/test/" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{$nav.csrf}}"><button type="submit" class="btn-secondary btn-sm">Send test</button></form>
+<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/settings/alerts/{{.ID}}/toggle/" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{$nav.csrf}}"><button type="submit" class="btn-secondary btn-sm">{{if .Enabled}}Disable{{else}}Enable{{end}}</button></form>
+<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/settings/alerts/{{.ID}}/delete/" class="inline-form" onsubmit="return confirm('Delete this alert rule?')">
+<input type="hidden" name="csrf_token" value="{{$nav.csrf}}"><button type="submit" class="btn-danger btn-sm">Delete</button></form>
+{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="muted">No alert rules yet. Rules fire on new issues, regressions, or event-count thresholds, then stay quiet per issue for the quiet period.</p>
+{{end}}
+{{if .Data.can_admin}}
+<details>
+<summary>New alert rule</summary>
+<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/settings/alerts/new" class="stacked-form narrow">
+  <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+  <label>Name <input type="text" name="name" placeholder="Page the dev"></label>
+  <label>Trigger <select name="trigger"><option value="new_issue">new_issue</option><option value="regression">regression</option><option value="event_count">event_count</option></select></label>
+  <label>Environments (comma-separated, blank = all) <input type="text" name="environments" placeholder="production"></label>
+  <label>Releases (comma-separated, blank = all) <input type="text" name="releases"></label>
+  <label>Levels (comma-separated, blank = all) <input type="text" name="levels" placeholder="error"></label>
+  <label>Threshold count (event_count only) <input type="number" name="threshold_count" value="10" min="1"></label>
+  <label>Threshold window minutes (event_count only) <input type="number" name="threshold_minutes" value="60" min="1"></label>
+  <label>Quiet period minutes per issue <input type="number" name="quiet_minutes" value="30" min="0"></label>
+  <label>Email recipients (comma-separated) <input type="text" name="email_to" placeholder="dev@example.com"></label>
+  <label>Webhook URL <input type="url" name="webhook_url" placeholder="https://hooks.example.com/bughan"></label>
+  <label><input type="checkbox" name="enabled" value="1" checked> Enabled</label>
+  <button type="submit">Create rule</button>
+</form>
+</details>
+{{end}}
+<h3>Alert deliveries</h3>
+{{if .Data.alert_deliveries}}
+<table class="tbl">
+<thead><tr><th>When</th><th>Rule</th><th>Action</th><th>Target</th><th>Status</th></tr></thead>
+<tbody>
+{{range .Data.alert_deliveries}}
+<tr><td class="muted">{{.Created}}</td><td>{{.RuleName}} <span class="muted">({{.Trigger}})</span></td><td><code>{{.Action}}</code></td><td class="muted">{{.Target}}</td>
+<td>{{if eq .Status "sent"}}<span class="badge badge-ok">sent</span>{{else}}<span class="badge badge-warn" title="{{.Error}}">failed</span>{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="muted">No deliveries yet.</p>
+{{end}}
 <h3>Danger zone</h3>
 <p><button class="btn-danger" id="wipe-btn" type="button">Delete all event data</button></p>
 <p class="muted">Wipes events, transactions, sessions, feedback, rollups, releases, and issues for this project. Keys and saved views survive. This cannot be undone.</p>
@@ -478,6 +536,16 @@ document.getElementById("wipe-btn").addEventListener("click", async () => {
 <tbody>{{range .Data.keys}}<tr><td>{{.Name}}</td><td>{{if .Active}}<code class="dsn">{{.DSN}}</code>{{else}}<span class="muted">revoked</span>{{end}}</td></tr>{{end}}</tbody>
 </table>
 {{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_alert_tested"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$org := .Data.org}}{{$proj := .Data.project}}
+<h2>Alert test sent</h2>
+<p>{{.Data.sent}} action(s) sent, {{.Data.failed}} failed. Check the delivery log on the
+<a href="/{{$org.Slug}}/{{$proj.Slug}}/settings/">project settings</a> page.</p>
 {{template "app_foot" .}}
 {{end}}
 

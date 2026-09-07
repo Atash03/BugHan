@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -93,9 +94,28 @@ func (s *Server) handleEnvelope(w http.ResponseWriter, r *http.Request, authCach
 	}
 	s.log.Debug("envelope accepted", "project", auth.ProjectID,
 		"accepted", res.Accepted, "ignored", res.Ignored, "unknown", res.Unknown, "dupes", res.Duplicates)
+	s.enqueueAlertEvaluations(r.Context(), res.Signals, auth.ProjectID)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"id": env.Header.EventID, "accepted": res.Accepted})
+}
+
+// enqueueAlertEvaluations schedules async alert-rule evaluation (DESIGN.md
+// §12) for each stored error event. Failures to enqueue never fail ingest —
+// the worker also self-heals nothing here; the event is already stored.
+func (s *Server) enqueueAlertEvaluations(ctx context.Context, signals []ingest.AlertSignal, projectID string) {
+	for _, sig := range signals {
+		payload, _ := json.Marshal(map[string]any{
+			"project_id": projectID, "issue_id": sig.IssueID, "event_id": sig.EventID,
+			"is_new": sig.IsNew, "is_regression": sig.IsRegression,
+			"environment": sig.Environment, "release": sig.Release, "level": sig.Level,
+		})
+		if _, err := s.pool.Exec(ctx,
+			`INSERT INTO jobs (kind, payload, run_at) VALUES ('alert_evaluate', $1, now())`,
+			payload); err != nil {
+			s.log.Warn("enqueue alert evaluation", "err", err)
+		}
+	}
 }
 
 // handleStore accepts the legacy single-event JSON store endpoint by wrapping
@@ -144,6 +164,7 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request, authCache *
 		writeIngestErr(w, http.StatusBadRequest, "event rejected: "+err.Error())
 		return
 	}
+	s.enqueueAlertEvaluations(r.Context(), res.Signals, auth.ProjectID)
 	// eventID is raw JSON — decode to a plain string so the response id
 	// isn't double-quoted.
 	var idStr string

@@ -261,6 +261,37 @@ func (s *Server) uiRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		mutate(s.uiRevokeKey)(w, r)
 		return
+	case len(tail) == 3 && tail[0] == "settings" && tail[1] == "alerts" && tail[2] == "new":
+		if !post {
+			badMethod()
+			return
+		}
+		mutate(s.uiCreateAlertRule)(w, r)
+		return
+	case len(tail) == 4 && tail[0] == "settings" && tail[1] == "alerts" && tail[3] == "delete":
+		set("ruleID", tail[2])
+		if !post {
+			badMethod()
+			return
+		}
+		mutate(s.uiDeleteAlertRule)(w, r)
+		return
+	case len(tail) == 4 && tail[0] == "settings" && tail[1] == "alerts" && tail[3] == "toggle":
+		set("ruleID", tail[2])
+		if !post {
+			badMethod()
+			return
+		}
+		mutate(s.uiToggleAlertRule)(w, r)
+		return
+	case len(tail) == 4 && tail[0] == "settings" && tail[1] == "alerts" && tail[3] == "test":
+		set("ruleID", tail[2])
+		if !post {
+			badMethod()
+			return
+		}
+		mutate(s.uiTestAlertRule)(w, r)
+		return
 	}
 	http.NotFound(w, r)
 }
@@ -1301,6 +1332,8 @@ func (s *Server) uiProjectSettings(w http.ResponseWriter, r *http.Request) {
 		Data: map[string]any{
 			"nav": s.uiNav(r, u, o, p, "settings"), "org": o, "project": p,
 			"keys": keys, "can_admin": roleAtLeast(s.orgRole(r, o.Slug), "admin"),
+			"alert_rules": s.uiAlertRules(r, p.ID),
+			"alert_deliveries": s.uiAlertDeliveries(r, p.ID),
 		},
 	})
 }
