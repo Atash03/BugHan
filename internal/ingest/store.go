@@ -87,6 +87,8 @@ func (p *Processor) storeEvent(ctx context.Context, tx pgx.Tx, env *Envelope, it
 		id, issueID, ts); err != nil {
 		return false, nil, err
 	}
+	// Late-arriving error completes earlier feedback: attach waiting rows.
+	backfillFeedback(ctx, tx, projectID, issueID, id, ts)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO event_rollups (issue_id, hour, count) VALUES ($1, $2, 1)
 		ON CONFLICT (issue_id, hour) DO UPDATE SET count = event_rollups.count + 1`,
@@ -433,6 +435,56 @@ func (p *Processor) storeSessionAggregates(ctx context.Context, tx pgx.Tx, item 
 	return nil
 }
 
+// associationWindow is the Sentry-compatible window in which a feedback
+// report attaches to its associated error event's issue (ticket #45).
+const associationWindow = 30 * time.Minute
+
+// resolveFeedbackIssue looks up the associated error event's issue when it
+// exists in the same project and the feedback timestamp is within the
+// association window. Returns a NULL uuid when unlinked (event unknown,
+// outside the window, or no association).
+func resolveFeedbackIssue(ctx context.Context, tx pgx.Tx, projectID string, assoc uuid.NullUUID, feedbackTS time.Time, hasTS bool) uuid.NullUUID {
+	if !assoc.Valid {
+		return uuid.NullUUID{}
+	}
+	var issueID uuid.NullUUID
+	var eventTS time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT issue_id, timestamp FROM events_part
+		WHERE id = $1 AND project_id = $2
+		ORDER BY timestamp DESC LIMIT 1`,
+		assoc.UUID, projectID).Scan(&issueID, &eventTS); err != nil {
+		return uuid.NullUUID{}
+	}
+	if !issueID.Valid {
+		return uuid.NullUUID{}
+	}
+	if hasTS && eventTS.Sub(feedbackTS) > associationWindow || feedbackTS.Sub(eventTS) > associationWindow {
+		return uuid.NullUUID{}
+	}
+	return issueID
+}
+
+// backfillFeedback links waiting feedback rows for a just-stored event to
+// its issue. The window compares the feedback payload timestamp against the
+// event timestamp; rows without a parseable payload timestamp always link
+// (legacy user_report shape carries none).
+func backfillFeedback(ctx context.Context, tx pgx.Tx, projectID, issueID string, eventID uuid.UUID, eventTS time.Time) {
+	_, _ = tx.Exec(ctx, `
+		UPDATE feedbacks SET issue_id = $1
+		WHERE project_id = $2 AND associated_event_id = $3 AND issue_id IS NULL
+		  AND (
+		    (payload->>'timestamp') IS NULL
+		    OR (payload->>'timestamp') = ''
+		    OR ABS(EXTRACT(EPOCH FROM (
+		      CASE WHEN (payload->>'timestamp') ~ '^[0-9]+(\.[0-9]+)?$'
+		           THEN to_timestamp((payload->>'timestamp')::double precision)
+		           ELSE COALESCE((payload->>'timestamp')::timestamptz, $4::timestamptz)
+		      END - $4::timestamptz))) <= 1800
+		  )`,
+		issueID, projectID, eventID, eventTS.UTC().Format(time.RFC3339Nano))
+}
+
 // storeFeedback persists feedback (SDK v8 `feedback` items) and legacy
 // `user_report` items into the same table. The envelope header event_id is
 // the report's id (payload event_id on user_report references the associated
@@ -462,15 +514,24 @@ func (p *Processor) storeFeedback(ctx context.Context, tx pgx.Tx, env *Envelope,
 		id := feedbackID(env, f.EventID)
 		var assoc uuid.NullUUID
 		if f.Contexts.Feedback.AssociatedEventID != "" {
-			if parsed, err := uuid.Parse(f.Contexts.Feedback.AssociatedEventID); err == nil {
+			if parsed, err := uuid.Parse(strings.ToLower(f.Contexts.Feedback.AssociatedEventID)); err == nil {
 				assoc = uuid.NullUUID{UUID: parsed, Valid: true}
 			}
 		}
+		fbTS := time.Now().UTC()
+		hasTS := false
+		if len(f.Timestamp) > 0 {
+			if t, err := parseTimestamp(f.Timestamp); err == nil {
+				fbTS = t
+				hasTS = true
+			}
+		}
+		issueID := resolveFeedbackIssue(ctx, tx, projectID, assoc, fbTS, hasTS)
 		_, err := tx.Exec(ctx, `
-			INSERT INTO feedbacks (id, project_id, associated_event_id, name, contact_email, message, url, payload)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			INSERT INTO feedbacks (id, project_id, associated_event_id, issue_id, name, contact_email, message, url, payload)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 			ON CONFLICT (id) DO NOTHING`,
-			id, projectID, assoc, f.Contexts.Feedback.Name, f.Contexts.Feedback.ContactEmail,
+			id, projectID, assoc, issueID, f.Contexts.Feedback.Name, f.Contexts.Feedback.ContactEmail,
 			f.Contexts.Feedback.Message, f.Contexts.Feedback.URL, json.RawMessage(item.Payload))
 		return err
 	case "user_report":
@@ -485,15 +546,17 @@ func (p *Processor) storeFeedback(ctx context.Context, tx pgx.Tx, env *Envelope,
 		}
 		var assoc uuid.NullUUID
 		if r.EventID != "" {
-			if parsed, err := uuid.Parse(r.EventID); err == nil {
+			if parsed, err := uuid.Parse(strings.ToLower(r.EventID)); err == nil {
 				assoc = uuid.NullUUID{UUID: parsed, Valid: true}
 			}
 		}
+		// user_report carries no own timestamp — link whenever the event is known.
+		issueID := resolveFeedbackIssue(ctx, tx, projectID, assoc, time.Now().UTC(), false)
 		_, err := tx.Exec(ctx, `
-			INSERT INTO feedbacks (id, project_id, associated_event_id, name, contact_email, message, payload)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			INSERT INTO feedbacks (id, project_id, associated_event_id, issue_id, name, contact_email, message, payload)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 			ON CONFLICT (id) DO NOTHING`,
-			feedbackID(env, ""), projectID, assoc, r.Name, r.Email, r.Comments, json.RawMessage(item.Payload))
+			feedbackID(env, ""), projectID, assoc, issueID, r.Name, r.Email, r.Comments, json.RawMessage(item.Payload))
 		return err
 	}
 	return fmt.Errorf("not a feedback item")
