@@ -190,6 +190,51 @@ func (s *Server) uiRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		page(s.uiOnboarding)(w, r)
 		return
+	case len(tail) == 1 && tail[0] == "performance":
+		if !get {
+			badMethod()
+			return
+		}
+		page(s.uiPerformance)(w, r)
+		return
+	case len(tail) == 2 && tail[0] == "traces":
+		set("traceID", tail[1])
+		if !get {
+			badMethod()
+			return
+		}
+		page(s.uiTrace)(w, r)
+		return
+	case len(tail) == 1 && tail[0] == "releases":
+		if !get {
+			badMethod()
+			return
+		}
+		page(s.uiReleases)(w, r)
+		return
+	case len(tail) == 2 && tail[0] == "releases":
+		set("version", tail[1])
+		if !get {
+			badMethod()
+			return
+		}
+		page(s.uiReleaseDetail)(w, r)
+		return
+	case len(tail) == 3 && tail[0] == "releases" && tail[2] == "files":
+		set("version", tail[1])
+		if !post {
+			badMethod()
+			return
+		}
+		mutate(s.uiUploadReleaseFile)(w, r)
+		return
+	case len(tail) == 1 && tail[0] == "feedback":
+		if !get {
+			badMethod()
+			return
+		}
+		page(s.uiFeedbackList)(w, r)
+		return
 	case len(tail) == 1 && tail[0] == "settings":
 		if get {
 			page(s.uiProjectSettings)(w, r)
@@ -413,17 +458,17 @@ func (s *Server) uiOrgDashboard(w http.ResponseWriter, r *http.Request) {
 	latest := s.queryIssueCards(ctx, o.ID, 8)
 
 	// Release health strip: newest releases with last-event timestamps.
-	type release struct{ Project, Version, LastEvent string }
+	type release struct{ Project, Slug, Version, LastEvent string }
 	rels := []release{}
 	rrows, err := s.pool.Query(ctx, `
-		SELECT p.name, r.version, COALESCE(r.last_event_at::text, '')
+		SELECT p.name, p.slug, r.version, COALESCE(r.last_event_at::text, '')
 		FROM releases r JOIN projects p ON p.id = r.project_id
 		WHERE p.org_id = $1 ORDER BY r.last_event_at DESC NULLS LAST LIMIT 5`, o.ID)
 	if err == nil {
 		defer rrows.Close()
 		for rrows.Next() {
 			var rel release
-			_ = rrows.Scan(&rel.Project, &rel.Version, &rel.LastEvent)
+			_ = rrows.Scan(&rel.Project, &rel.Slug, &rel.Version, &rel.LastEvent)
 			rels = append(rels, rel)
 		}
 		rrows.Close()
