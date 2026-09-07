@@ -57,8 +57,9 @@
   {{if $nav.org}}{{$org := $nav.org}}
     {{if $nav.project}}{{$proj := $nav.project}}
     <a class="{{if eq $nav.section "issues"}}active{{end}}" href="/{{$org.Slug}}/{{$proj.Slug}}/issues/">Issues</a>
-    <span class="disabled" title="Lands with T9">Performance <em>T9</em></span>
-    <span class="disabled" title="Lands with T9">Releases <em>T9</em></span>
+    <a class="{{if eq $nav.section "performance"}}active{{end}}" href="/{{$org.Slug}}/{{$proj.Slug}}/performance/">Performance</a>
+    <a class="{{if eq $nav.section "releases"}}active{{end}}" href="/{{$org.Slug}}/{{$proj.Slug}}/releases/">Releases</a>
+    <a class="{{if eq $nav.section "feedback"}}active{{end}}" href="/{{$org.Slug}}/{{$proj.Slug}}/feedback/">Feedback</a>
     <a class="{{if eq $nav.section "projects"}}active{{end}}" href="/{{$org.Slug}}/projects/">Projects</a>
     <a class="{{if eq $nav.section "settings"}}active{{end}}" href="/{{$org.Slug}}/{{$proj.Slug}}/settings/">Settings</a>
     {{else}}
@@ -132,7 +133,7 @@
 <h3>Recent releases</h3>
 {{if .Data.releases}}
 <ul class="plain-list">
-  {{range .Data.releases}}<li><strong>{{.Project}} · {{.Version}}</strong> <span class="muted">last event {{.LastEvent}}</span></li>{{end}}
+  {{range .Data.releases}}<li><a href="/{{$org.Slug}}/{{.Slug}}/releases/{{.Version}}/">{{.Project}} · {{.Version}}</a> <span class="muted">last event {{.LastEvent}}</span></li>{{end}}
 </ul>
 {{else}}
 <p class="muted">No releases seen yet.</p>
@@ -294,7 +295,7 @@ Sentry.init({
     </select>
     <button type="submit" class="btn-secondary">Assign</button>
   </form>
-  {{if .Data.trace_id}}<p>trace_id <code>{{.Data.trace_id}}</code>{{if .Data.span_id}} · span <code>{{.Data.span_id}}</code>{{end}} <span class="muted">(waterfall lands with T9)</span></p>{{end}}
+  {{if .Data.trace_id}}<p><a href="/{{$org.Slug}}/{{$proj.Slug}}/traces/{{.Data.trace_id}}/">View trace</a> <span class="muted"><code>{{.Data.trace_id}}</code>{{if .Data.span_id}} · span <code>{{.Data.span_id}}</code>{{end}}</span></p>{{end}}
 </section>
 
 <h3>Stack trace</h3>
@@ -514,5 +515,248 @@ document.getElementById("wipe-btn").addEventListener("click", async () => {
   <button type="submit" class="btn-secondary">New token</button>
 </form>
 <p class="muted">Tokens authenticate the REST API as you; their reach is the union of your memberships.</p>
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_performance"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$org := .Data.org}}{{$proj := .Data.project}}
+<h2>Performance</h2>
+<form method="get" action="/{{$org.Slug}}/{{$proj.Slug}}/performance/" class="filter-row">
+  <select name="statsPeriod">
+    <option value="1h" {{if eq .Data.period "1h"}}selected{{end}}>Last hour</option>
+    <option value="24h" {{if or (eq .Data.period "24h") (eq .Data.period "")}}selected{{end}}>Last 24 hours</option>
+    <option value="7d" {{if eq .Data.period "7d"}}selected{{end}}>Last 7 days</option>
+    <option value="30d" {{if eq .Data.period "30d"}}selected{{end}}>Last 30 days</option>
+  </select>
+  <button type="submit">Apply</button>
+</form>
+{{if .Data.vitals}}
+<h3>Web vitals <span class="muted">(median of recent transactions)</span></h3>
+<p class="chips">
+  {{range .Data.vitals}}<span class="chip vital-{{.Rating}}" title="{{.Name}} median">{{.Name}} {{printf "%.1f" .Value}}{{.Unit}} · {{.Rating}}</span> {{end}}
+</p>
+{{end}}
+<h3>Volume · last 24 hours</h3>
+{{$chart := .Data.chart}}
+{{if $chart.buckets}}
+<div class="chart">
+  {{range $chart.buckets}}<div class="bar" style="height:{{pct .Count $chart.max}}%" title="{{.Hour}} — {{.Count}}"></div>{{end}}
+</div>
+{{else}}
+<p class="muted">No transactions in the last 24 hours.</p>
+{{end}}
+<h3>Transactions</h3>
+{{if .Data.rows}}
+<table class="tbl">
+  <thead><tr><th>Transaction</th><th>Events</th><th>Failures</th><th>p50</th><th>p95</th><th>p99</th><th></th></tr></thead>
+  <tbody>
+  {{range .Data.rows}}
+    <tr>
+      <td><a href="/{{$org.Slug}}/{{$proj.Slug}}/performance/?name={{.Name}}">{{.Name}}</a></td>
+      <td>{{.Count}}</td>
+      <td>{{.Failures}} <span class="muted">({{printf "%.1f" .FailRate}}%)</span></td>
+      <td>{{printf "%.0f" .P50}}ms</td>
+      <td>{{printf "%.0f" .P95}}ms</td>
+      <td>{{printf "%.0f" .P99}}ms</td>
+      <td>{{if .RecentlySlow}}<span class="badge badge-warn">recently slow</span>{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No transactions in this window — enable tracing in the SDK (<code>tracesSampleRate</code>) and they will land here.</p>
+{{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_transaction"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$org := .Data.org}}{{$proj := .Data.project}}{{$d := .Data.detail}}
+<p class="crumbs"><a href="/{{$org.Slug}}/{{$proj.Slug}}/performance/">Performance</a> / {{$d.Name}}</p>
+<h2>{{$d.Name}}</h2>
+<p class="muted">{{$d.Count}} events · {{$d.Failures}} failures ({{printf "%.1f" .Data.fail_rate}}%) · p50 {{printf "%.0f" $d.P50}}ms · p95 {{printf "%.0f" $d.P95}}ms · p99 {{printf "%.0f" $d.P99}}ms</p>
+<h3>Duration histogram</h3>
+{{if $d.Histogram}}
+<div class="chart">
+  {{range $d.Histogram}}<div class="bar" style="height:{{pct .Count $.Data.hist_max}}%" title="{{printf "%.0f" .FromMS}}–{{printf "%.0f" .ToMS}}ms — {{.Count}}"></div>{{end}}
+</div>
+{{else}}
+<p class="muted">Not enough data for a histogram in this window.</p>
+{{end}}
+<h3>Recent events</h3>
+{{if $d.Recent}}
+<table class="tbl">
+  <thead><tr><th>Event</th><th>Started</th><th>Duration</th><th>Status</th><th>Trace</th></tr></thead>
+  <tbody>
+  {{range $d.Recent}}
+    <tr>
+      <td><code>{{.ID}}</code></td>
+      <td class="muted">{{.Start.Format "2006-01-02 15:04:05"}}</td>
+      <td>{{printf "%.0f" .DurationMS}}ms</td>
+      <td>{{if and (ne .Status "") (ne .Status "ok")}}<span class="badge badge-warn">{{.Status}}</span>{{else}}<span class="muted">{{.Status}}</span>{{end}}</td>
+      <td>{{if .TraceID}}<a href="/{{$org.Slug}}/{{$proj.Slug}}/traces/{{.TraceID}}/">trace</a>{{else}}<span class="muted">—</span>{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No events in this window.</p>
+{{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_trace"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$org := .Data.org}}{{$proj := .Data.project}}
+<p class="crumbs"><a href="/{{$org.Slug}}/{{$proj.Slug}}/performance/">Performance</a> / trace <code>{{.Data.trace_id}}</code></p>
+<h2>Trace <span class="muted">{{printf "%.0f" .Data.total_ms}}ms</span></h2>
+<form method="get" action="/{{$org.Slug}}/{{$proj.Slug}}/traces/{{.Data.trace_id}}/" class="filter-row">
+  <input type="search" name="op" placeholder="Filter by op…" value="{{.Data.op}}">
+  <input type="search" name="q" placeholder="Filter spans…" value="{{.Data.q}}">
+  <button type="submit">Filter</button>
+  {{if or .Data.op .Data.q}}<a class="btn btn-ghost" href="/{{$org.Slug}}/{{$proj.Slug}}/traces/{{.Data.trace_id}}/">Clear</a>{{end}}
+  <span class="muted">{{.Data.matched}} / {{.Data.spans_total}} spans</span>
+</form>
+{{range .Data.txs}}
+<section class="trace-tx">
+  <h3>{{$tx := .Tx}}{{$tx.Name}} <span class="muted">{{printf "%.0f" $tx.DurationMS}}ms · {{$tx.Status}} · {{$tx.Environment}}{{if $tx.Release}} · {{$tx.Release}}{{end}}</span></h3>
+  {{if .Vitals}}<p class="chips">{{range .Vitals}}<span class="chip vital-{{.Rating}}">{{.Name}} {{printf "%.1f" .Value}}{{.Unit}}</span> {{end}}</p>{{end}}
+  <div class="waterfall">
+    <div class="wl-row wl-root"><span class="wl-label" title="{{$tx.Name}}">{{$tx.Name}}</span><div class="wl-track"><div class="wl-bar wl-root-bar" style="left:{{printf "%.2f" .Left}}%;width:{{printf "%.2f" .Width}}%"></div></div></div>
+    {{range .Spans}}
+    <div class="wl-row {{if .Dimmed}}wl-dim{{end}} {{if .Selected}}wl-sel{{end}}"><span class="wl-label" title="{{.Span.Description}}">{{.Span.Op}} · {{.Span.Description}}</span><div class="wl-track"><a class="wl-bar" href="?span={{.Span.SpanID}}{{if $.Data.op}}&amp;op={{$.Data.op}}{{end}}{{if $.Data.q}}&amp;q={{$.Data.q}}{{end}}" style="left:{{printf "%.2f" .Left}}%;width:{{printf "%.2f" .Width}}%" title="{{.Span.Op}} — {{printf "%.1f" .Span.DurationMS}}ms"></a></div></div>
+    {{end}}
+    {{range $.Data.errors}}
+    <div class="wl-row wl-err"><span class="wl-label">✕ {{.Err.Title}}</span><div class="wl-track"><i class="wl-tick" style="left:{{printf "%.2f" .Left}}%" title="{{.Err.Title}} ({{.Err.Timestamp.Format "15:04:05"}})"></i></div></div>
+    {{end}}
+  </div>
+</section>
+{{end}}
+<h3>Self time · top 5</h3>
+{{if .Data.self}}
+<table class="tbl narrow">
+  <tbody>
+  {{range .Data.self}}<tr><td>{{.Label}}</td><td>{{printf "%.1f" .Ms}}ms</td><td class="self-bar"><div class="hbar" style="width:{{printf "%.0f" .Pct}}%"></div></td></tr>{{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No spans on this trace.</p>
+{{end}}
+{{if .Data.selected}}
+{{$sp := .Data.selected}}
+<h3>Span <code>{{$sp.SpanID}}</code></h3>
+<table class="tbl narrow"><tbody>
+  <tr><td><code>op</code></td><td>{{$sp.Op}}</td></tr>
+  <tr><td><code>description</code></td><td>{{$sp.Description}}</td></tr>
+  <tr><td><code>status</code></td><td>{{$sp.Status}}</td></tr>
+  <tr><td><code>parent</code></td><td><code>{{$sp.ParentSpanID}}</code></td></tr>
+  <tr><td><code>duration</code></td><td>{{printf "%.1f" $sp.DurationMS}}ms</td></tr>
+</tbody></table>
+{{end}}
+{{if .Data.errors}}
+<h3>Errors on this trace</h3>
+<ul class="plain-list">
+  {{range .Data.errors}}<li><span class="badge badge-level">{{.Err.Level}}</span> <a href="/{{$org.Slug}}/{{$proj.Slug}}/issues/{{.Err.IssueID}}/">{{.Err.Title}}</a> <span class="muted">{{.Err.Culprit}} · {{.Err.Timestamp.Format "2006-01-02 15:04:05"}}</span></li>{{end}}
+</ul>
+{{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_releases"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$org := .Data.org}}{{$proj := .Data.project}}
+<h2>Releases</h2>
+{{if .Data.releases}}
+<table class="tbl">
+  <thead><tr><th>Version</th><th>Sessions (7d)</th><th>Crash-free</th><th>Users</th><th>Adoption</th><th>Last event</th></tr></thead>
+  <tbody>
+  {{range .Data.releases}}
+    <tr>
+      <td><a href="/{{$org.Slug}}/{{$proj.Slug}}/releases/{{.Version}}/">{{.Version}}</a> {{if .IsNew}}<span class="badge badge-ok">new</span>{{end}}</td>
+      <td>{{.Total}}</td>
+      <td>{{if .Total}}{{printf "%.1f" .CrashFree}}%{{else}}<span class="muted">—</span>{{end}}</td>
+      <td>{{if .Users}}{{.Users}}{{else}}<span class="muted">—</span>{{end}}</td>
+      <td>{{if .Total}}{{printf "%.1f" .AdoptionPct}}%{{else}}<span class="muted">—</span>{{end}}</td>
+      <td class="muted">{{.LastEvent}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No releases seen yet — releases are created implicitly on first event, or explicitly via the API before source-map upload.</p>
+{{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_release"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$nav := .Data.nav}}{{$org := .Data.org}}{{$proj := .Data.project}}
+<p class="crumbs"><a href="/{{$org.Slug}}/{{$proj.Slug}}/releases/">Releases</a> / {{.Data.version}}</p>
+<h2>{{.Data.version}} {{if .Data.is_new}}<span class="badge badge-ok">new</span>{{end}}</h2>
+<p class="muted">first event {{.Data.first_event}} · last event {{.Data.last_event}}</p>
+{{$h := .Data.health}}
+{{if $h}}
+<section class="stat-strip">
+  <div class="stat"><span class="stat-num">{{$h.Total}}</span><span class="stat-label">Sessions (7d)</span></div>
+  <div class="stat"><span class="stat-num">{{printf "%.1f" .Data.crash_free_pct}}%</span><span class="stat-label">Crash-free sessions</span></div>
+  <div class="stat"><span class="stat-num">{{$h.UniqueUsers}}</span><span class="stat-label">Unique users</span></div>
+  <div class="stat"><span class="stat-num">{{$h.Crashed}}</span><span class="stat-label">Crashed</span></div>
+</section>
+{{else}}
+<p class="muted">No session data for this release in the last 7 days.</p>
+{{end}}
+<h3>Issues first seen in this release</h3>
+{{if .Data.issues}}
+<ul class="plain-list">
+  {{range .Data.issues}}<li><a href="/{{$org.Slug}}/{{$proj.Slug}}/issues/{{.ID}}/">{{.Title}}</a> <span class="muted">first seen {{.FirstSeen}}</span></li>{{end}}
+</ul>
+{{else}}
+<p class="muted">No issues recorded against this release.</p>
+{{end}}
+<h3>Source-map files</h3>
+{{if .Data.files}}
+<table class="tbl">
+  <thead><tr><th>Name</th><th>Dist</th><th>Size</th><th>Debug ID</th><th>Uploaded</th></tr></thead>
+  <tbody>
+  {{range .Data.files}}<tr><td><code>{{.Name}}</code></td><td class="muted">{{.Dist}}</td><td>{{.Size}}</td><td class="muted">{{if .DebugID}}<code>{{.DebugID}}</code>{{else}}—{{end}}</td><td class="muted">{{.Created}}</td></tr>{{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No artifacts uploaded for this release — upload the built <code>.js</code> and <code>.js.map</code> files so stack traces symbolicate.</p>
+{{end}}
+{{if .Data.can_admin}}
+<h3>Upload artifact</h3>
+<form method="post" action="/{{$org.Slug}}/{{$proj.Slug}}/releases/{{.Data.version}}/files/" enctype="multipart/form-data" class="stacked-form narrow">
+  <input type="hidden" name="csrf_token" value="{{$nav.csrf}}">
+  <label>File <input type="file" name="file" required></label>
+  <label>Name override <input type="text" name="name" placeholder="~/static/js/main.js (defaults to filename)"></label>
+  <label>Dist <input type="text" name="dist" placeholder="optional"></label>
+  <button type="submit" class="btn-secondary">Upload</button>
+</form>
+{{end}}
+{{template "app_foot" .}}
+{{end}}
+
+{{define "app_feedback"}}
+{{template "app_head" .}}
+{{template "app_chrome" .}}
+{{$org := .Data.org}}{{$proj := .Data.project}}
+<h2>User feedback</h2>
+{{if .Data.feedbacks}}
+{{range .Data.feedbacks}}
+<div class="feedback">
+  <p>{{.Message}}</p>
+  <p class="muted">{{.Name}} · {{.Email}} · {{.Received}}{{if .URL}} · <a href="{{.URL}}">{{.URL}}</a>{{end}}{{if .IssueID}} · <a href="/{{$org.Slug}}/{{$proj.Slug}}/issues/{{.IssueID}}/">linked issue</a>{{end}}</p>
+</div>
+{{end}}
+{{else}}
+<p class="muted">No feedback yet — the SDK's feedback widget posts here, and reports attach to their issue within a 30-minute window.</p>
+{{end}}
 {{template "app_foot" .}}
 {{end}}

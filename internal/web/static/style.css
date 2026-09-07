@@ -184,3 +184,23 @@ select {
 .muted { color: var(--muted); font-size: 13px; }
 p.muted, .muted { margin-top: 8px; }
 .auth-card .muted { margin-top: 14px; }
+
+/* T9: vitals chips, waterfall, self-time bars */
+.chips { margin: 10px 0; }
+.vital-good { color: var(--ok); border-color: var(--ok); }
+.vital-meh { color: var(--notice); border-color: var(--notice); }
+.vital-poor { color: var(--error); border-color: var(--error); }
+.trace-tx { margin: 16px 0; }
+.waterfall { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; overflow-x: auto; }
+.wl-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.wl-label { flex: 0 0 260px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); }
+.wl-track { position: relative; flex: 1; height: 18px; background: var(--surface-2); border-radius: 4px; min-width: 200px; }
+.wl-bar { position: absolute; top: 3px; height: 12px; background: var(--accent); border-radius: 3px; opacity: .85; display: block; }
+.wl-root-bar { background: var(--accent-hover); }
+.wl-dim { opacity: .35; }
+.wl-sel .wl-label { color: var(--text); font-weight: 700; }
+.wl-sel .wl-bar { outline: 2px solid var(--notice); }
+.wl-err .wl-label { color: var(--error); }
+.wl-tick { position: absolute; top: -3px; width: 3px; height: 24px; background: var(--error); border-radius: 2px; }
+.self-bar { min-width: 140px; }
+.hbar { height: 12px; background: var(--accent); border-radius: 3px; opacity: .85; }
