@@ -1,7 +1,10 @@
 # BugHan REST API (v0.1)
 
-The Issues API lets scripts, bots, and the web UI read and triage error
-issues. It lives under `/api/0/` and speaks JSON.
+The `/api/0/` surface lets scripts, bots, CI (source-map upload), and the
+web UI manage tenancy, triage error issues, and read performance, releases,
+and alerting. It speaks JSON. SDK event ingest lives next to it at
+`POST /api/{project}/envelope/` (see [Ingest](#ingest-sdk-envelope-endpoint)
+below).
 
 Terminology follows [CONTEXT.md](../CONTEXT.md): an **Issue** is a durable
 grouping of related **Events**; **Affected Users** (user hashes) are not
@@ -267,3 +270,160 @@ Non-2xx counts as failed (and is retried with the job). Versioned body:
   "urls": { "issue": "https://bugs.example.com/acme/web-app/issues/…/",
             "event": "https://bugs.example.com/acme/web-app/issues/…/?event=…" } }
 ```
+
+---
+
+## Tenancy & credentials
+
+```
+GET  /api/0/                                              → whoami + server version
+GET  /api/0/organizations/                                → my orgs (with my role)
+POST /api/0/organizations/            {"name": "Acme"}    → 201 {id, name, slug}
+GET  /api/0/organizations/{org}/                          → org detail (member)
+GET  /api/0/organizations/{org}/members/                  → membership list (member)
+DELETE /api/0/organizations/{org}/members/{memberID}/     → remove (admin) → 204
+POST /api/0/organizations/{org}/invites/  {"email": "…", "role": "member"} → 201 invite (admin)
+GET  /api/0/organizations/{org}/invites/                  → pending invites (admin)
+DELETE /api/0/organizations/{org}/invites/{inviteID}/     → revoke (admin) → 204
+```
+
+Invites are single-use, 7-day tokenized links; acceptance is a browser flow
+(`GET /accept/{token}`). Roles: `owner` > `admin` > `member` (see
+Authentication above for what each may do).
+
+```
+GET  /api/0/organizations/{org}/projects/                 → project list (member)
+POST /api/0/organizations/{org}/projects/  {"name": "Web App", "platform": "javascript"} → 201 (admin)
+GET  /api/0/projects/{org}/{project}/                     → project detail incl. DSN (member)
+```
+
+Project creation mints the first ingest key and returns it inline
+(`keys: [{id, name, dsn}]`); `platform` defaults to `javascript`.
+
+```
+GET    /api/0/projects/{org}/{project}/keys/              → ingest keys + DSNs (member)
+POST   /api/0/projects/{org}/{project}/keys/  {"name": "ci"} → 201 {id, name, dsn, active} (admin)
+DELETE /api/0/projects/{org}/{project}/keys/{keyID}/      → revoke; its traffic 403s from then on (admin) → 204
+```
+
+The DSN is `scheme://<ingest-key>@<host>/<project-id>` (built from
+`BUGHAN_URL`), handed to the SDK as-is. Several keys may live side by side
+for rotation; revoking one stops only its traffic.
+
+```
+GET    /api/0/tokens/                        → my tokens (id, name, prefix, scope, active)
+POST   /api/0/tokens/  {"name": "ci", "scope": "write"} → 201, with the single plaintext `token` (bghan_…)
+DELETE /api/0/tokens/{tokenID}/              → revoke → 204
+```
+
+`scope` is `read` or `write` (default `write`); only the full secret is
+returned at creation — it is stored hashed and never readable again.
+
+## Releases & source-map files
+
+Classic release-files surface (DESIGN.md §10) — the path `sentry-cli
+sourcemaps upload` drives with **sentry-cli 2.x** (3.x removed it; see
+[docs/self-host.md](./self-host.md)). Release creation is idempotent:
+re-creating an existing release answers `208` with an empty project list.
+
+```
+POST /api/0/organizations/{org}/releases/                        {"version": "my-app@1.0.0", "projects": ["web-app"]} → 201|208 (admin)
+GET  /api/0/organizations/{org}/releases/                        → release list (member)
+POST /api/0/projects/{org}/{project}/releases/                  {"version": "my-app@1.0.0"} → 201|208 (admin)
+GET  /api/0/projects/{org}/{project}/releases/                  → release list (member)
+```
+
+Release rows: `{version, shortVersion, status, firstEvent, lastEvent,
+dateCreated}`. Releases are also created implicitly the first time an
+event/session declares the version.
+
+```
+POST   /api/0/projects/{org}/{project}/releases/{version}/files/    multipart: file + name (+ dist, repeatable header "Name: Value") → 201 (admin)
+GET    /api/0/projects/{org}/{project}/releases/{version}/files/    → file list (member)
+DELETE /api/0/projects/{org}/{project}/releases/{version}/files/{fileID}/ → 204 (admin)
+GET    /api/0/organizations/{org}/releases/{version}/files/         → files across the org's projects (member)
+DELETE /api/0/organizations/{org}/releases/{version}/files/{fileID}/ → 204 (admin)
+```
+
+Caps: 50 MB/file, 500 MB/release (both → `413`). Identical re-uploads
+dedupe (SHA-256) and return the existing row; same name with different
+content → `409`. File rows: `{id, name, dist, size, sha256, sha1, headers,
+dateCreated}` (`sha1` exists because sentry-cli's parser requires it).
+
+## Performance & traces
+
+Project-scoped reads for any member. Windowed endpoints take
+`?statsPeriod=` (`1h`/`24h`/`7d`/`30d` suffixes; default `24h`, capped at
+`30d`).
+
+```
+GET /api/0/projects/{org}/{project}/performance/summary/?statsPeriod=24h
+```
+
+Per-transaction-name aggregates over the window: `{name, count, failures,
+p50, p95, p99, recently_slow}` (`recently_slow` = last-hour p95 > 2× the
+7-day baseline).
+
+```
+GET /api/0/projects/{org}/{project}/performance/transaction/?name=/users/:id&statsPeriod=24h
+```
+
+`name` is required: window aggregates + hourly rollup series + recent raw
+events (each with `trace_id`, duration, and extracted web vitals) + a
+duration histogram.
+
+```
+GET /api/0/projects/{org}/{project}/traces/{traceID}/
+```
+
+The waterfall payload: `{trace_id, transactions: [{id, name, status,
+environment, release, duration_ms, vitals, spans: [{span_id, op,
+description, duration_ms}]}], errors: [{id, issue_id, title, level, culprit,
+timestamp}]}` — error events sharing the `trace_id` ride along as ticks.
+
+```
+GET /api/0/projects/{org}/{project}/releases-health/?statsPeriod=24h
+```
+
+Session health per release: `{release, total, crashed, abnormal, errored,
+crash_free_sessions, crash_free_users, unique_users}` (crash-free user rate
+unions the HLL distinct-`did` sketches).
+
+## Ingest (SDK envelope endpoint)
+
+```
+POST /api/{projectID}/envelope/?sentry_key=<ingest-key>&sentry_version=7&sentry_client=sentry.javascript.browser/10.70.0
+POST /api/{projectID}/store/?sentry_key=<ingest-key>   (legacy JSON store, older SDKs)
+```
+
+- Auth: `?sentry_key=` (the browser SDK's CORS-safe form), `X-Sentry-Auth`
+  header, or the envelope `dsn` header (tunnel mode); all present values
+  must agree; none/invalid → `403`. Key resolution is cached ~30s.
+- Framing: JSON header line + items; `Content-Type:
+  application/x-sentry-envelope` implied, `text/plain` accepted;
+  `Content-Encoding: gzip`/`deflate`/`br`/`zstd` handled with a
+  decompressed-size cap (`BUGHAN_MAX_EVENT_MB`, default 20 MB; over → `413`).
+- Unknown item types are tolerated, never rejected. `event_id`/`sid`
+  collisions dedupe to a `200` no-op (SDK retries are safe).
+- Server→SDK contract: `2xx` accept; `429` + `Retry-After` +
+  `X-Sentry-Rate-Limits` when `BUGHAN_RATE_LIMIT_PER_MIN` trips (the SDK
+  drops, never retries); any other 4xx/5xx = drop + client report (never a
+  retry signal).
+
+## Liveness
+
+```
+GET /api/health/   (also /api/health)
+```
+
+No auth. `200 {"status":"ok","version":"…","time":"…"}` when live and the
+DB pings; `503 {"status":"degraded","database":"unreachable",…}` when
+Postgres is down. `Cache-Control: no-store`; excluded from access logs.
+
+## Feedback
+
+User feedback (`feedback` + legacy `user_report` envelopes) is accepted at
+ingest, linked to its issue inside a 30-minute association window
+(late-arriving errors backfill the link), retained 90 days, and surfaced
+read-only: the issue-detail panel and the project's feedback page in the
+web UI. There is no feedback REST API in v0.1.

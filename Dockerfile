@@ -1,10 +1,11 @@
 # Build stage — static binary, no CGO.
 FROM golang:1.25-alpine AS build
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/bughan ./cmd/bughan
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/bughan ./cmd/bughan
 
 # Run stage.
 FROM alpine:3.21

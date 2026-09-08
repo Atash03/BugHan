@@ -23,6 +23,18 @@ import (
 	"golang.org/x/term"
 )
 
+// version stamps /api/health/ and /api/0/ (whoami). Release builds set it
+// with -ldflags "-X main.version=<tag>" (see Dockerfile ARG VERSION);
+// BUGHAN_VERSION overrides at runtime (compose, CI smoke).
+var version = "dev"
+
+func binaryVersion() string {
+	if v := strings.TrimSpace(os.Getenv("BUGHAN_VERSION")); v != "" {
+		return v
+	}
+	return version
+}
+
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if len(os.Args) > 1 {
@@ -102,7 +114,7 @@ func runServe(log *slog.Logger) {
 		os.Exit(1)
 	}
 
-	srv := httpapi.New(cfg, pool, log)
+	srv := httpapi.NewWithVersion(cfg, pool, log, binaryVersion())
 	httpSrv := &http.Server{Addr: cfg.BindAddr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	if cfg.WorkerEmbedded {
