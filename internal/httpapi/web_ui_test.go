@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // T8 web UI slice tests: shell auth gating, dashboard, issues list + detail,
@@ -68,7 +69,9 @@ func TestWebUIIssuesAndDetail(t *testing.T) {
 	sess, csrf := uiLogin(t, s, fx)
 
 	fx.postErrorEnvelope(t, s, "9ec79c33ec9942ab8353589fcb2e04dc", "TypeError",
-		"Cannot read properties of undefined", "user-1", "2026-09-06T10:00:00Z")
+		// Current timestamp: the sparkline reads trailing-24h rollups, so a
+		// fixed fixture date rots as wall-clock time moves past it.
+		"Cannot read properties of undefined", "user-1", time.Now().UTC().Format("2006-01-02T15:04:05Z"))
 	issueID := fx.firstIssueID(t, s)
 
 	// Issues list shows the ingested issue with its sparkline + filters.

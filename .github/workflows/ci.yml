@@ -34,6 +34,49 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
+  smoke:
+    runs-on: ubuntu-latest
+    needs: test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bughan
+          POSTGRES_PASSWORD: bughan
+          POSTGRES_DB: bughan_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bughan"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://bughan:bughan@localhost:5432/bughan_test?sslmode=disable
+      BUGHAN_SECRET_KEY: ci-smoke-secret-key
+      BUGHAN_VERSION: ci-smoke
+      BUGHAN_URL: http://localhost:8000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Validate compose file
+        run: BUGHAN_SECRET_KEY=dummy docker compose config --quiet
+      - name: Build binary
+        run: go build -o /tmp/bughan ./cmd/bughan
+      - name: Boot server and probe health
+        run: |
+          /tmp/bughan serve >/tmp/bughan.log 2>&1 &
+          SRV=$!
+          trap "kill $SRV" EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/health/ -o /tmp/health.json; then break; fi
+            sleep 2
+          done
+          cat /tmp/health.json
+          python3 -c "import json; b=json.load(open('/tmp/health.json')); assert b['status']=='ok', b; assert b['version']=='ci-smoke', b; print('smoke ok:', b)"
+
   docker:
     runs-on: ubuntu-latest
     needs: test

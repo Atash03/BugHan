@@ -14,21 +14,32 @@ import (
 func TestHealthOK(t *testing.T) {
 	pool := testdb.New(t)
 	cfg := &config.Config{}
-	s := New(cfg, pool, slog.Default())
+	s := NewWithVersion(cfg, pool, slog.Default(), "v0.1.0-test")
 
-	req := httptest.NewRequest("GET", "/api/health/", nil)
-	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, req)
+	for _, path := range []string{"/api/health/", "/api/health"} {
+		req := httptest.NewRequest("GET", path, nil)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
 
-	if rec.Code != 200 {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	var body map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if body["status"] != "ok" {
-		t.Fatalf("status field = %q", body["status"])
+		if rec.Code != 200 {
+			t.Fatalf("%s status = %d, want 200", path, rec.Code)
+		}
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s decode body: %v", path, err)
+		}
+		if body["status"] != "ok" {
+			t.Fatalf("%s status field = %q", path, body["status"])
+		}
+		if body["version"] != "v0.1.0-test" {
+			t.Fatalf("%s version field = %q, want stamped binary version", path, body["version"])
+		}
+		if body["time"] == "" {
+			t.Fatalf("%s missing server time field", path)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Fatalf("%s Cache-Control = %q, want no-store", path, cc)
+		}
 	}
 }
 

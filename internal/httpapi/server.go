@@ -23,14 +23,22 @@ type Server struct {
 	version  string
 }
 
-// New creates the server root.
+// New creates the server root (binary version "dev"; use NewWithVersion
+// when the caller knows the release tag).
 func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *Server {
+	return NewWithVersion(cfg, pool, log, "dev")
+}
+
+// NewWithVersion creates the server root, stamping health/whoami responses
+// with the binary version (main.version, set via ldflags or BUGHAN_VERSION).
+func NewWithVersion(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, version string) *Server {
 	return &Server{
 		cfg:      cfg,
 		pool:     pool,
 		log:      log,
 		sessions: auth.NewSessions(pool),
 		mailer:   mail.New(cfg, log),
+		version:  version,
 	}
 }
 
@@ -38,8 +46,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Health (liveness + DB readiness).
+	// Health (liveness + DB readiness). Both spellings answer so probes
+	// and humans never 404 on a missing trailing slash.
 	mux.HandleFunc("GET /api/health/", s.handleHealth)
+	mux.HandleFunc("GET /api/health", s.handleHealth)
 
 	// Embedded static assets.
 	mux.Handle("GET /static/", web.Static())
@@ -95,7 +105,7 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		next.ServeHTTP(rec, r)
-		if r.URL.Path != "/api/health/" {
+		if r.URL.Path != "/api/health/" && r.URL.Path != "/api/health" {
 			s.log.Info("http", "method", r.Method, "path", r.URL.Path, "status", rec.status)
 		}
 	})
